@@ -1,0 +1,4 @@
+# Домены Cloudflare WARP (zapret --hostlist, поддомены матчатся автоматически)
+cloudflareclient.com
+cloudflare-dns.com
+one.one.one.one

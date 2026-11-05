@@ -1,0 +1,187 @@
+# Domains routed through WARP proxy
+# "+.domain" = domain + all subdomains, "domain" = exact match
+
+# IP check services
+flclashx.app
+ipwho.is
+api.myip.com
+ipapi.co
+ident.me
+ip-api.com
+ipinfo.io
+api.ip.sb
+2ip.io
+2ipcore.com
+
+# Google AI (agy, AI Studio, Gemini)
++.daily-cloudcode-pa.googleapis.com
++.generativelanguage.googleapis.com
++.proactivebackend-pa.googleapis.com
++.alkalimakersuite-pa.clients6.google.com
++.aistudio.google.com
++.gemini.google.com
++.artificialanalysis.ai
+
+# Blocked / restricted in RU
++.ua
++.habr.com
++.seasonvar.ru
++.lib.social
++.kemono.su
++.jut.su
++.kara.su
++.theins.ru
++.tvrain.ru
++.echo.msk.ru
++.the-village.ru
++.snob.ru
++.novayagazeta.ru
++.moscowtimes.ru
++.natribu.org
++.virustotal.com
++.sc-cdn.net
++.hpe.com
+
+# YouTube / Google Video
++.youtube.com
++.googlevideo.com
++.ggpht.com
++.ytimg.com
+
+# Discord
++.discord.com
++.discord.gg
++.discord.media
++.discordapp.com
++.discordapp.net
+gateway.discord.gg
+cdn.discordapp.com
+
+# Telegram
++.t.me
++.telegram.org
++.telegram.me
++.telesco.pe
+core.telegram.org
+web.telegram.org
+
+# Instagram
++.instagram.com
++.cdninstagram.com
+
+# Twitter / X
++.twitter.com
++.x.com
++.twimg.com
+
+# TikTok
++.tiktok.com
+
+# LinkedIn
++.linkedin.com
+
+# Medium
++.medium.com
+
+# Spotify
++.spotify.com
++.scdn.co
++.spotify.design
+
+# SoundCloud
++.soundcloud.com
+
+# Patreon
++.patreon.com
+
+# Notion
++.notion.so
++.notion.site
+
+# OpenAI / ChatGPT
++.openai.com
+chat.openai.com
++.chatgpt.com
+
+# Anthropic / Claude
++.anthropic.com
++.claude.ai
+
+# Perplexity
++.perplexity.ai
+
+# Hugging Face
++.huggingface.co
+
+# GitHub
++.github.com
++.github.io
++.githubusercontent.com
++.githubassets.com
+copilot.github.com
+
+# Docker
++.docker.com
++.docker.io
+hub.docker.com
++.quay.io
+
+# VPN services
++.nordvpn.com
++.protonvpn.com
++.proton.me
++.protonmail.com
+
+# Signal
++.signal.org
++.whispersystems.org
+
+# BBC
++.bbc.com
++.bbc.co.uk
+
+# Torrents / file sharing
++.rutor.info
++.rutracker.org
++.nnmclub.to
++.kinozal.tv
+
+# Sci-Hub / LibGen / Z-Library
++.sci-hub.se
++.sci-hub.st
++.libgen.rs
++.libgen.is
++.z-lib.org
+
+# Archive.org
++.archive.org
+
+# Productivity / design
++.grammarly.com
++.canva.com
++.figma.com
+
+# Streaming / social
++.netflix.com
++.twitch.tv
++.reddit.com
++.redditmedia.com
++.redditstatic.com
++.imgur.com
+
+# Wiki / reference
++.wikimedia.org
++.wikipedia.org
++.fandom.com
+
+# Blogging / art
++.tumblr.com
++.pixiv.net
++.deviantart.com
++.artstation.com
++.behance.net
++.dribbble.com
+
+# Steam
++.steamcommunity.com
+store.steampowered.com

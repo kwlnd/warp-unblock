@@ -1,0 +1,17 @@
+# Local WARP account and generated WireGuard credentials
+/warp/wgcf-account.toml
+/warp/wgcf-profile.conf
+/warp/reserved.txt
+/mihomo/warp.yaml
+
+# Runtime state and downloaded caches
+/mihomo/cache.db*
+/mihomo/rule-sets/
+/mihomo/ui/
+*.log
+
+# Temporary diagnostic files
+/.diagnostic*
+/.font-*
+/.console-check.cmd
+/.launch-check.cmd

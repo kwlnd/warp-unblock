@@ -1,0 +1,4 @@
+# Preserve OEM CP866/CRLF batch files and UTF-8 BOM PowerShell scripts.
+*.bat -text
+*.cmd -text
+*.ps1 -text
