@@ -1,4 +1,3 @@
-# Preserve OEM CP866/CRLF batch files and UTF-8 BOM PowerShell scripts.
-*.bat -text
-*.cmd -text
-*.ps1 -text
+* text=auto eol=lf
+# PowerShell 5.1 requires the UTF-8 BOM; preserve scripts byte-for-byte.
+*.ps1 -text whitespace=cr-at-eol

@@ -1,0 +1,9 @@
+{
+    "tag":  "v72.13",
+    "repository":  "https://github.com/bol-van/zapret",
+    "commit":  "87e058624c72863db53bdaf7fb6f16576dddb6ab",
+    "driver":  "Existing signed WinDivert64.sys; not rebuilt",
+    "sha256":  "b94def76338c970a66102bd47249d79088aa98c8e317eb5278294a57cd9a7fc4",
+    "compiler":  "gcc (GCC) 14.4.0",
+    "resources":  "Locally rebuilt manifest, no upstream .o resources"
+}
