@@ -31,6 +31,8 @@ pub struct App {
     settings: Settings,
     catalog: Vec<strategies::Strategy>,
     busy: bool,
+    stage: Option<(usize, usize, String)>,
+    batch: Option<(usize, usize, usize)>,
     stopping: bool,
     running: bool,
     status: String,
@@ -116,6 +118,8 @@ impl App {
             settings,
             catalog,
             busy: true,
+            stage: None,
+            batch: None,
             stopping: false,
             running: false,
             status: "Проверяю файлы…".into(),
@@ -136,6 +140,8 @@ impl App {
     fn action(&mut self, command: Command, status: &str) {
         self.stopping = matches!(command, Command::Stop);
         self.busy = true;
+        self.stage = None;
+        self.batch = None;
         self.status = status.into();
         self.worker.send(command);
     }
@@ -185,7 +191,10 @@ impl App {
                     egui::Atom::grow(),
                 ))
                 .fill(fill)
-                .stroke(egui::Stroke::new(1.0, if active { BORDER } else { ACCENT_HOVER }))
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    if active { BORDER } else { ACCENT_HOVER },
+                ))
                 .corner_radius(10.0)
                 .min_size(egui::vec2(ui.available_width(), 56.0)),
             )
@@ -199,6 +208,52 @@ impl App {
         }
     }
 
+    fn progress(&self, ui: &mut egui::Ui) {
+        let bar = |ui: &mut egui::Ui, fraction: f32, height: f32| {
+            ui.add(
+                egui::ProgressBar::new(fraction.clamp(0.0, 1.0))
+                    .fill(ACCENT)
+                    .desired_height(height)
+                    .corner_radius(height / 2.0),
+            );
+        };
+        if let Some((done, total, failed)) = self.batch {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Подбор профиля").size(14.0).color(MUTED));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(format!("проверено {done} из {total}"))
+                            .size(14.0)
+                            .color(TEXT),
+                    );
+                    if failed > 0 {
+                        ui.label(
+                            RichText::new(format!("не прошло {failed}  "))
+                                .size(14.0)
+                                .color(ERROR),
+                        );
+                    }
+                });
+            });
+            bar(ui, done as f32 / total.max(1) as f32, 10.0);
+        }
+        if let Some((done, total, text)) = &self.stage {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(text).size(14.0).color(MUTED));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(format!("этап {} из {total}", (done + 1).min(*total)))
+                            .size(14.0)
+                            .color(MUTED),
+                    );
+                });
+            });
+            bar(ui, *done as f32 / (*total).max(1) as f32, 6.0);
+        }
+    }
+
     fn profiles(&mut self, ui: &mut egui::Ui) {
         let current = if self.settings.custom {
             "Свои аргументы".to_owned()
@@ -208,65 +263,71 @@ impl App {
                 .replace("WARP · ", "")
         };
         let right = ui.max_rect().right();
-        let response = egui::CollapsingHeader::new(RichText::new("Профиль WARP").size(16.0).strong())
-            .id_salt("profile")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.add_space(4.0);
-                ui.add_enabled_ui(!self.busy && !self.running, |ui| {
-                    egui::ComboBox::from_id_salt("strategy")
-                        .width(ui.available_width() - 12.0)
-                        .height(220.0)
-                        .selected_text(if self.settings.custom {
-                            "Свои аргументы winws"
-                        } else {
-                            &self.catalog[self.settings.strategy].name
-                        })
-                        .show_ui(ui, |ui| {
-                            for (index, profile) in self.catalog.iter().enumerate() {
-                                if ui
-                                    .selectable_label(
-                                        !self.settings.custom && self.settings.strategy == index,
-                                        &profile.name,
-                                    )
-                                    .clicked()
-                                {
-                                    self.settings.strategy = index;
-                                    self.settings.custom = false;
+        let response =
+            egui::CollapsingHeader::new(RichText::new("Профиль WARP").size(16.0).strong())
+                .id_salt("profile")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add_space(4.0);
+                    ui.add_enabled_ui(!self.busy && !self.running, |ui| {
+                        egui::ComboBox::from_id_salt("strategy")
+                            .width(ui.available_width() - 12.0)
+                            .height(220.0)
+                            .selected_text(if self.settings.custom {
+                                "Свои аргументы winws"
+                            } else {
+                                &self.catalog[self.settings.strategy].name
+                            })
+                            .show_ui(ui, |ui| {
+                                for (index, profile) in self.catalog.iter().enumerate() {
+                                    if ui
+                                        .selectable_label(
+                                            !self.settings.custom
+                                                && self.settings.strategy == index,
+                                            &profile.name,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.settings.strategy = index;
+                                        self.settings.custom = false;
+                                    }
                                 }
+                                ui.selectable_value(
+                                    &mut self.settings.custom,
+                                    true,
+                                    "Свои аргументы winws",
+                                );
+                            });
+                        if self.settings.custom {
+                            ui.label("Аргументы winws");
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.settings.custom_args)
+                                    .desired_rows(2)
+                                    .desired_width(f32::INFINITY),
+                            );
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button("Тест профиля").clicked() {
+                                self.action(
+                                    Command::Test(self.settings.clone()),
+                                    "Проверяю профиль…",
+                                );
                             }
-                            ui.selectable_value(
-                                &mut self.settings.custom,
-                                true,
-                                "Свои аргументы winws",
-                            );
+                            if ui.button("Подобрать автоматически").clicked()
+                            {
+                                self.action(
+                                    Command::Auto(self.settings.clone()),
+                                    "Подбираю профиль WARP…",
+                                );
+                            }
                         });
-                    if self.settings.custom {
-                        ui.label("Аргументы winws");
-                        ui.add(
-                            egui::TextEdit::multiline(&mut self.settings.custom_args)
-                                .desired_rows(2)
-                                .desired_width(f32::INFINITY),
+                        ui.label(
+                            RichText::new("Проверка без TUN. Перед тестом отключите другой VPN.")
+                                .size(14.0)
+                                .color(MUTED),
                         );
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.button("Тест профиля").clicked() {
-                            self.action(Command::Test(self.settings.clone()), "Проверяю профиль…");
-                        }
-                        if ui.button("Подобрать автоматически").clicked() {
-                            self.action(
-                                Command::Auto(self.settings.clone()),
-                                "Подбираю профиль WARP…",
-                            );
-                        }
                     });
-                    ui.label(
-                        RichText::new("Проверка без TUN. Перед тестом отключите другой VPN.")
-                            .size(14.0)
-                            .color(MUTED),
-                    );
                 });
-            });
         ui.painter().text(
             egui::pos2(right, response.header_response.rect.center().y),
             egui::Align2::RIGHT_CENTER,
@@ -360,7 +421,10 @@ impl App {
                                 .show(ui, |ui| {
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(&self.engine_log).monospace().size(13.0).color(MUTED),
+                                            RichText::new(&self.engine_log)
+                                                .monospace()
+                                                .size(13.0)
+                                                .color(MUTED),
                                         )
                                         .wrap(),
                                     );
@@ -385,6 +449,8 @@ impl eframe::App for App {
                     self.running = running;
                     self.status = status;
                     if !busy {
+                        self.stage = None;
+                        self.batch = None;
                         self.stopping = false;
                     }
                 }
@@ -396,6 +462,8 @@ impl eframe::App for App {
                         *check = (text, ok);
                     }
                 }
+                Event::Stage(done, total, text) => self.stage = Some((done, total, text)),
+                Event::Batch(batch) => self.batch = batch,
                 Event::Selected(index) => {
                     self.settings.strategy = index;
                     self.settings.custom = false;
@@ -455,6 +523,9 @@ impl eframe::App for App {
                                 }
                             });
                         });
+                        if self.busy {
+                            self.progress(ui);
+                        }
                     });
                 ui.add_space(8.0);
                 egui::ScrollArea::vertical()

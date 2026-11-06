@@ -15,6 +15,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+const STAGES: usize = 5;
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub strategy: usize,
@@ -64,6 +66,10 @@ pub enum Event {
     },
     Check(usize, String, bool),
     Selected(usize),
+    /// Этап одной проверки/подключения: (сделано, всего, название).
+    Stage(usize, usize, String),
+    /// Автоподбор: (пройдено, всего, не прошло). None — подбор не идёт.
+    Batch(Option<(usize, usize, usize)>),
 }
 
 pub struct Worker {
@@ -202,6 +208,11 @@ impl Engine {
             status: status.to_owned(),
         });
     }
+    fn stage(&self, done: usize, text: &str) {
+        let _ = self
+            .events
+            .send(Event::Stage(done, STAGES, text.to_owned()));
+    }
     fn item(&self, index: usize, text: &str, ok: bool) {
         let _ = self.events.send(Event::Check(index, text.to_owned(), ok));
     }
@@ -324,6 +335,7 @@ impl Engine {
                 format!("Порт {port} занят. Отключите другой прокси перед запуском")
             })?;
         }
+        self.stage(0, "Подготовка компонентов");
         self.prepare()?;
         let catalog = strategies::load(&self.root)?;
         let profile = catalog
@@ -334,6 +346,7 @@ impl Engine {
             profile.name, profile.endpoint, profile.port
         ));
         let args = strategy_args(settings, &self.root)?;
+        self.stage(1, "Запуск zapret");
         if !args.is_empty() {
             self.log("Запускаю zapret…");
             let process = self.launch("app/bin/zapret/winws.exe", &args, "zapret.log")?;
@@ -372,6 +385,7 @@ impl Engine {
         } else {
             None
         };
+        self.stage(2, "Настройка профиля WARP");
         let parameters = [
             "-Action".to_string(),
             "register".into(),
@@ -404,6 +418,7 @@ impl Engine {
             "-f".into(),
             self.root.join(config).display().to_string(),
         ];
+        self.stage(3, "Проверка конфигурации");
         let mut validation = vec!["-t".to_string()];
         validation.extend(args.clone());
         self.log("Проверяю конфигурацию mihomo…");
@@ -414,11 +429,14 @@ impl Engine {
         } else {
             "Поднимаю TUN. Обычный трафик — DIRECT."
         });
+        self.stage(4, "Запуск mihomo");
         let process = self.launch("app/bin/mihomo/mihomo.exe", &args, "mihomo.log")?;
         self.children.push(process);
         self.running = !test;
         self.state(true, "Проверяю тоннель WARP…");
+        self.stage(4, "Проверка тоннеля WARP");
         let delay = self.delay(port, Duration::from_secs(40))?;
+        self.stage(STAGES, "Готово");
         self.item(2, &format!("WARP отвечает · {delay} мс"), true);
         self.log(&format!("WARP доступен, задержка {delay} мс."));
         if test {
@@ -439,10 +457,14 @@ impl Engine {
         let order =
             std::iter::once(preferred).chain((0..catalog.len()).filter(|i| *i != preferred));
         let mut results = Vec::new();
+        let mut failed = 0usize;
         settings.custom = false;
         for (attempt, index) in order.enumerate() {
             self.cancelled()?;
             settings.strategy = index;
+            let _ = self
+                .events
+                .send(Event::Batch(Some((attempt, catalog.len(), failed))));
             self.state(
                 true,
                 &format!(
@@ -464,6 +486,12 @@ impl Engine {
                 self.root.join("data/strategy-results.json"),
                 serde_json::to_vec_pretty(&results)?,
             )?;
+            if result.is_err() {
+                failed += 1;
+            }
+            let _ = self
+                .events
+                .send(Event::Batch(Some((attempt + 1, catalog.len(), failed))));
             if result.is_ok() {
                 settings.save(&self.root)?;
                 let _ = self.events.send(Event::Selected(index));
