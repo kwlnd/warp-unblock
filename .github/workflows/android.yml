@@ -15,6 +15,7 @@ permissions:
 env:
   MIHOMO_VERSION: v1.19.33
   HEV_VERSION: 2.9.3
+  BYEDPI_VERSION: v0.8.1
 
 jobs:
   apk:
@@ -58,9 +59,23 @@ jobs:
           set -e
           git clone --depth 1 --branch "$HEV_VERSION" --recursive https://github.com/heiher/hev-socks5-tunnel /tmp/hev
           cd /tmp/hev
-          "$ANDROID_NDK_HOME/ndk-build" NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=Android.mk NDK_APPLICATION_MK=Application.mk APP_ABI="arm64-v8a armeabi-v7a" -j"$(nproc)"
+          "$ANDROID_NDK_LATEST_HOME/ndk-build" NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=Android.mk NDK_APPLICATION_MK=Application.mk APP_ABI="arm64-v8a armeabi-v7a" -j"$(nproc)"
           for abi in arm64-v8a armeabi-v7a; do
             cp "libs/$abi/libhev-socks5-tunnel.so" "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/$abi/"
+          done
+
+      - name: ByeDPI (обход DPI для регистрации WARP) через NDK
+        run: |
+          set -e
+          git clone --depth 1 --branch "$BYEDPI_VERSION" https://github.com/hufrea/byedpi /tmp/byedpi
+          cd /tmp/byedpi
+          TC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for pair in "arm64-v8a:aarch64-linux-android24-clang" "armeabi-v7a:armv7a-linux-androideabi24-clang"; do
+            abi="${pair%%:*}"; cc="${pair##*:}"
+            make clean >/dev/null 2>&1 || true
+            make CC="$TC/$cc"
+            cp ciadpi "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/$abi/libbyedpi.so"
+            chmod +x "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/$abi/libbyedpi.so"
           done
 
       - uses: gradle/actions/setup-gradle@v4
