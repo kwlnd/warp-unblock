@@ -1,0 +1,90 @@
+[
+  {
+    "name": "WARP · padding 4 · без zapret",
+    "endpoint": "162.159.192.1",
+    "port": 2408,
+    "jc": 4,
+    "jmin": 40,
+    "jmax": 70
+  },
+  {
+    "name": "WARP · порт 1701 · padding 4",
+    "endpoint": "162.159.192.1",
+    "port": 1701,
+    "jc": 4,
+    "jmin": 40,
+    "jmax": 70
+  },
+  {
+    "name": "WARP · порт 500 · padding 4",
+    "endpoint": "162.159.192.1",
+    "port": 500,
+    "jc": 4,
+    "jmin": 40,
+    "jmax": 70
+  },
+  {
+    "name": "WARP · порт 4500 · padding 4",
+    "endpoint": "162.159.192.1",
+    "port": 4500,
+    "jc": 4,
+    "jmin": 40,
+    "jmax": 70
+  },
+  {
+    "name": "WARP · 193.1:2408 · padding 4",
+    "endpoint": "162.159.193.1",
+    "port": 2408,
+    "jc": 4,
+    "jmin": 40,
+    "jmax": 70
+  },
+  {
+    "name": "WARP · 193.1:1701 · padding 4",
+    "endpoint": "162.159.193.1",
+    "port": 1701,
+    "jc": 4,
+    "jmin": 40,
+    "jmax": 70
+  },
+  {
+    "name": "WARP · padding 8 · без zapret",
+    "endpoint": "162.159.192.1",
+    "port": 2408,
+    "jc": 8,
+    "jmin": 40,
+    "jmax": 70
+  },
+  {
+    "name": "WARP · padding 16 · без zapret",
+    "endpoint": "162.159.192.1",
+    "port": 2408,
+    "jc": 16,
+    "jmin": 40,
+    "jmax": 70
+  },
+  {
+    "name": "WARP · padding 4 · 64–128 байт",
+    "endpoint": "162.159.192.1",
+    "port": 2408,
+    "jc": 4,
+    "jmin": 64,
+    "jmax": 128
+  },
+  {
+    "name": "WARP · padding 8 · 64–128 байт",
+    "endpoint": "162.159.192.1",
+    "port": 2408,
+    "jc": 8,
+    "jmin": 64,
+    "jmax": 128
+  },
+  {
+    "name": "WARP · обычный WireGuard · без маскировки",
+    "endpoint": "162.159.192.1",
+    "port": 2408,
+    "jc": 0,
+    "jmin": 40,
+    "jmax": 70
+  }
+]
