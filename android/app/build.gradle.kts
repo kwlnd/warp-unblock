@@ -13,7 +13,7 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
-        versionName = System.getenv("VERSION_NAME") ?: "0.3.0"
+        versionName = System.getenv("VERSION_NAME") ?: "0.3.1"
     }
 
     // Подпись для хобби-проекта: ключ лежит в репозитории, чтобы обновления ставились поверх.
@@ -67,6 +67,7 @@ android {
 dependencies {
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     implementation(platform("androidx.compose:compose-bom:2024.09.03"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")

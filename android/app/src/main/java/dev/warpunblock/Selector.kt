@@ -54,9 +54,11 @@ object Selector {
                 core.writeProfile(strategy, account)
                 val test = core.start(true)
                 process = test
-                val delay = core.waitDelay(Core.TEST_API_PORT, 25) { test.runningCompat() && !cancelled }
+                val delay = core.waitDelay(Core.TEST_API_PORT, 5) { test.runningCompat() && !cancelled }
                 test.stopCompat()
-                test.waitFor()
+                val stopDeadline = System.nanoTime() + 250_000_000L
+                while (test.runningCompat() && System.nanoTime() < stopDeadline) Thread.sleep(10)
+                check(!test.runningCompat()) { "Не удалось остановить тестовое ядро" }
                 process = null
                 if (cancelled) break
                 ProfileStats.record(context, index, delay)
@@ -70,7 +72,6 @@ object Selector {
                     return
                 }
                 AppState.log("${if (delay != null) "Прошёл" else "Не прошёл"}: ${strategy.name}")
-                if (!cancelled) Thread.sleep(2000)
             }
             if (best && !cancelled) {
                 val index = ProfileStats.best(context, results.filterValues { it > 0 })

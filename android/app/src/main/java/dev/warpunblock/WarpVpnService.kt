@@ -62,7 +62,7 @@ class WarpVpnService : VpnService() {
             val process = core.start(false)
             mihomo = process
             AppState.set(UiState(Phase.BUSY, "Подключаю…", "Проверяю тоннель WARP"))
-            val delay = core.waitDelay(Core.API_PORT, 40) { process.runningCompat() && !stopping }
+            val delay = core.waitDelay(Core.API_PORT, 5) { process.runningCompat() && !stopping }
             if (stopping) return
             ProfileStats.record(this, AppState.strategyIndex.value, delay)
             if (delay == null) {
@@ -142,7 +142,7 @@ class WarpVpnService : VpnService() {
             }
             if (++counter < 30) continue
             counter = 0
-            val delay = core.waitDelay(Core.API_PORT, 12) { process.runningCompat() && !stopping }
+            val delay = core.waitDelay(Core.API_PORT, 5) { process.runningCompat() && !stopping }
             if (stopping) return
             AppState.delay.value = delay
             AppState.set(

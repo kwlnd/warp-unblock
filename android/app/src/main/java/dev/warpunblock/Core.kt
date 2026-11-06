@@ -2,8 +2,6 @@ package dev.warpunblock
 
 import android.content.Context
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 
 /** Ядро: рабочая папка mihomo, конфиги, запуск процесса и проверка WARP через API ядра. */
 class Core(private val context: Context) {
@@ -80,31 +78,8 @@ class Core(private val context: Context) {
     }
 
     /** Ждёт ответа WARP через delay-тест ядра. Возвращает задержку в мс или null по таймауту. */
-    fun waitDelay(apiPort: Int, timeoutSeconds: Int, alive: () -> Boolean): Int? {
-        val url = "http://127.0.0.1:$apiPort/proxies/WARP/delay?timeout=10000" +
-            "&url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204"
-        val deadline = System.currentTimeMillis() + timeoutSeconds * 1000L
-        while (System.currentTimeMillis() < deadline && alive()) {
-            val delay = runCatching {
-                val connection = URL(url).openConnection() as HttpURLConnection
-                connection.connectTimeout = 3_000
-                connection.readTimeout = 14_000
-                try {
-                    if (connection.responseCode == 200) {
-                        org.json.JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
-                            .optInt("delay", 0)
-                    } else {
-                        0
-                    }
-                } finally {
-                    connection.disconnect()
-                }
-            }.getOrDefault(0)
-            if (delay > 0) return delay
-            Thread.sleep(1000)
-        }
-        return null
-    }
+    fun waitDelay(apiPort: Int, timeoutSeconds: Int, alive: () -> Boolean): Int? =
+        WarpProbe.waitDelay(apiPort, timeoutSeconds * 1000L, alive)
 
     fun logTail(lines: Int = 40): String {
         val file = File(home, "mihomo.log")
