@@ -4,7 +4,7 @@ use crate::{
 };
 use eframe::egui::{self, Color32, RichText};
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -39,6 +39,8 @@ pub struct App {
     checks: [(String, bool); 3],
     journal: VecDeque<String>,
     engine_log: String,
+    /// Результаты последнего подбора: индекс профиля -> задержка (None — не прошёл).
+    results: HashMap<usize, Option<u64>>,
     last_tail: Instant,
     last_health: Option<Instant>,
     close_dialog: bool,
@@ -110,6 +112,7 @@ impl App {
                 .expect("built-in catalog")
         });
         settings.strategy = settings.strategy.min(catalog.len() - 1);
+        let root_for_results = root.clone();
         let worker = Worker::new(root.clone());
         worker.send(Command::Check);
         Self {
@@ -130,6 +133,7 @@ impl App {
             ],
             journal: VecDeque::new(),
             engine_log: String::new(),
+            results: load_results(&root_for_results),
             last_tail: Instant::now(),
             last_health: None,
             close_dialog: false,
@@ -280,14 +284,24 @@ impl App {
                             })
                             .show_ui(ui, |ui| {
                                 for (index, profile) in self.catalog.iter().enumerate() {
-                                    if ui
-                                        .selectable_label(
-                                            !self.settings.custom
-                                                && self.settings.strategy == index,
-                                            &profile.name,
-                                        )
-                                        .clicked()
-                                    {
+                                    let (color, label) =
+                                        mark(self.results.get(&index), &profile.name);
+                                    let selected =
+                                        !self.settings.custom && self.settings.strategy == index;
+                                    let clicked = ui
+                                        .horizontal(|ui| {
+                                            let x = ui.cursor().min.x;
+                                            ui.add_space(14.0);
+                                            let row = ui.selectable_label(selected, label);
+                                            ui.painter().circle_filled(
+                                                egui::pos2(x + 5.0, row.rect.center().y),
+                                                4.5,
+                                                color,
+                                            );
+                                            row.clicked()
+                                        })
+                                        .inner;
+                                    if clicked {
                                         self.settings.strategy = index;
                                         self.settings.custom = false;
                                     }
@@ -471,6 +485,7 @@ impl eframe::App for App {
             }
         }
         if self.last_tail.elapsed() > Duration::from_secs(1) {
+            self.results = load_results(&self.root);
             self.engine_log = tail(&self.root.join("data/logs/mihomo.log"));
             self.last_tail = Instant::now();
         }
@@ -558,6 +573,36 @@ impl eframe::App for App {
         }
         ctx.request_repaint_after(Duration::from_millis(250));
     }
+}
+
+/// Цвет маркера и текст строки списка: название профиля + итог подбора.
+fn mark(result: Option<&Option<u64>>, name: &str) -> (Color32, egui::text::LayoutJob) {
+    let (color, note) = match result {
+        Some(Some(ms)) => (OK, format!("  ·  {ms} мс")),
+        Some(None) => (ERROR, "  ·  не прошёл".to_owned()),
+        None => (BORDER, String::new()),
+    };
+    let font = egui::FontId::proportional(16.0);
+    let mut job = egui::text::LayoutJob::default();
+    job.append(name, 0.0, egui::TextFormat::simple(font.clone(), TEXT));
+    job.append(&note, 0.0, egui::TextFormat::simple(font, color));
+    (color, job)
+}
+
+fn load_results(root: &Path) -> HashMap<usize, Option<u64>> {
+    let Ok(data) = fs::read(root.join("data/strategy-results.json")) else {
+        return HashMap::new();
+    };
+    let Ok(items) = serde_json::from_slice::<Vec<serde_json::Value>>(&data) else {
+        return HashMap::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let index = item["index"].as_u64()? as usize;
+            Some((index, item["delay_ms"].as_u64()))
+        })
+        .collect()
 }
 
 fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
