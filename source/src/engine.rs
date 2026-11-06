@@ -673,7 +673,7 @@ pub fn self_test(root: &Path) -> Result<()> {
             }
         }
         let config = fs::read_to_string(root.join("app/config/config.yaml"))?;
-        if !config.contains("  - MATCH,По умолчанию") || config.contains("path: ../lists/")
+        if !config.contains("  - MATCH,DIRECT") || config.contains("path: ../lists/")
         {
             bail!("Config paths/default route invalid");
         }

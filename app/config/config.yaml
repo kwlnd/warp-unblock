@@ -67,8 +67,8 @@ dns:
     - https://8.8.8.8/dns-query#DIRECT
     - system
   nameserver:
-    - https://8.8.8.8/dns-query#По умолчанию
-    - https://94.140.14.14/dns-query#По умолчанию
+    - https://8.8.8.8/dns-query#DIRECT
+    - https://94.140.14.14/dns-query#DIRECT
   nameserver-policy:
     # Приватные домены → системный DNS
     rule-set:локальные-домены:
@@ -125,31 +125,14 @@ proxies:
 #  ГРУППЫ ПРОКСИ
 # ============================================================================
 proxy-groups:
+  # Единственная группа: mihomo не умеет направлять правила прямо в прокси из провайдера.
+  # Это не селектор — выбирать нечего, весь проксируемый трафик идёт в WARP.
   - name: WARP
-    type: select
+    type: fallback
     use:
       - warp
-
-  - name: YouTube
-    type: select
-    proxies:
-      - WARP
-
-  - name: Discord
-    type: select
-    proxies:
-      - WARP
-
-  - name: Telegram
-    type: select
-    proxies:
-      - WARP
-      - DIRECT
-
-  - name: По умолчанию
-    type: select
-    proxies:
-      - DIRECT
+    url: https://www.gstatic.com/generate_204
+    interval: 300
 
 # ============================================================================
 #  ПРОВАЙДЕРЫ ПРАВИЛ (из mihomo-routing)
@@ -432,22 +415,22 @@ rules:
   - RULE-SET,мои-в-обход,WARP
 
   # YouTube
-  - RULE-SET,youtube,YouTube
+  - RULE-SET,youtube,WARP
   - RULE-SET,google,WARP
-  - PROCESS-NAME-REGEX,(?i).*youtube.*,YouTube
+  - PROCESS-NAME-REGEX,(?i).*youtube.*,WARP
 
   # Telegram
-  - RULE-SET,telegram-адреса,Telegram,no-resolve
-  - RULE-SET,telegram-домены,Telegram
-  - PROCESS-NAME-REGEX,(?i).*telegram.*,Telegram
+  - RULE-SET,telegram-адреса,WARP,no-resolve
+  - RULE-SET,telegram-домены,WARP
+  - PROCESS-NAME-REGEX,(?i).*telegram.*,WARP
 
   # Discord
-  - AND,((RULE-SET,cloudflare-адреса),(NETWORK,udp),(DST-PORT,19200-19500)),Discord
-  - AND,((RULE-SET,cloudflare-адреса),(NETWORK,udp),(DST-PORT,50000-50100)),Discord
-  - AND,((RULE-SET,discord-голос-адреса),(NETWORK,udp),(DST-PORT,50000-50100)),Discord
-  - RULE-SET,discord-домены,Discord
-  - PROCESS-NAME-REGEX,(?i).*discord.*,Discord
-  - PROCESS-NAME-REGEX,(?i).*vesktop.*,Discord
+  - AND,((RULE-SET,cloudflare-адреса),(NETWORK,udp),(DST-PORT,19200-19500)),WARP
+  - AND,((RULE-SET,cloudflare-адреса),(NETWORK,udp),(DST-PORT,50000-50100)),WARP
+  - AND,((RULE-SET,discord-голос-адреса),(NETWORK,udp),(DST-PORT,50000-50100)),WARP
+  - RULE-SET,discord-домены,WARP
+  - PROCESS-NAME-REGEX,(?i).*discord.*,WARP
+  - PROCESS-NAME-REGEX,(?i).*vesktop.*,WARP
 
   # Spotify
   - RULE-SET,spotify,WARP
@@ -475,7 +458,7 @@ rules:
   - RULE-SET,российские-адреса,DIRECT
 
   # Всё остальное
-  - MATCH,По умолчанию
+  - MATCH,DIRECT
 
 # ============================================================================
 #  TUN
