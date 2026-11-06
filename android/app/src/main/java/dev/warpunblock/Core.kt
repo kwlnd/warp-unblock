@@ -42,7 +42,11 @@ class Core(private val context: Context) {
 
     /** Провайдер с WireGuard-прокси WARP; формат тот же, что пишет warp.ps1 на Windows. */
     fun writeProfile(strategy: Strategy, account: WarpAccount) {
-        val reserved = account.reserved.joinToString(", ", "[", "]")
+        val reserved = if (account.reserved.size == 3) {
+            "\n                reserved: " + account.reserved.joinToString(", ", "[", "]")
+        } else {
+            ""
+        }
         File(home, "warp.yaml").writeText(
             """
             proxies:
@@ -55,8 +59,7 @@ class Core(private val context: Context) {
                 private-key: ${account.privateKey}
                 public-key: ${account.publicKey}
                 mtu: 1280
-                udp: true
-                reserved: $reserved
+                udp: true$reserved
                 amnezia-wg-option:
                   jc: ${strategy.jc}
                   jmin: ${strategy.jmin}

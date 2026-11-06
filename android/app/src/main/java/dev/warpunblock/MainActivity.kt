@@ -7,6 +7,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -39,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -48,6 +50,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -361,6 +364,49 @@ private fun Profiles(ui: UiState, onAuto: () -> Unit) {
     val results by AppState.results.collectAsState()
     val locked = ui.phase == Phase.BUSY || ui.phase == Phase.CONNECTED
     val scheme = MaterialTheme.colorScheme
+    var hasAccount by remember { mutableStateOf(WarpAccount.load(context.filesDir) != null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                val text = context.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }
+                WarpAccount.parseWgcf(text).save(context.filesDir)
+            }.onSuccess {
+                hasAccount = true
+                AppState.log("Профиль WARP импортирован")
+                AppState.set(UiState(Phase.IDLE, "Профиль импортирован", "Можно подключаться"))
+            }.onFailure {
+                AppState.log("Импорт не удался: ${it.message}")
+                AppState.set(UiState(Phase.ERROR, "Импорт не удался", it.message ?: ""))
+            }
+        }
+    }
+    Tile {
+        Text("Аккаунт WARP", fontSize = 14.sp, color = scheme.onSurfaceVariant)
+        Text(
+            if (hasAccount) "Есть, готов к подключению" else "Нет — будет регистрация при подключении",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        Text(
+            "Если регистрация не проходит (оператор блокирует Cloudflare), импортируйте wgcf-profile.conf с компьютера.",
+            fontSize = 13.sp,
+            color = scheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilledTonalButton(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !locked) {
+                Text("Импортировать профиль")
+            }
+            if (hasAccount) {
+                TextButton(
+                    onClick = {
+                        WarpAccount.delete(context.filesDir)
+                        hasAccount = false
+                    },
+                    enabled = !locked,
+                ) { Text("Сбросить") }
+            }
+        }
+    }
     FilledTonalButton(
         onClick = onAuto,
         enabled = !locked,

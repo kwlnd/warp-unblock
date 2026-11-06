@@ -17,7 +17,41 @@ data class WarpAccount(
     val ipv6: String,
     val reserved: List<Int>,
 ) {
+    fun save(dir: File) {
+        dir.mkdirs()
+        File(dir, "warp.json").writeText(
+            JSONObject()
+                .put("private_key", privateKey)
+                .put("public_key", publicKey)
+                .put("ipv4", ipv4)
+                .put("ipv6", ipv6)
+                .put("reserved", org.json.JSONArray(reserved))
+                .toString(),
+        )
+    }
+
     companion object {
+        fun delete(dir: File) {
+            File(dir, "warp.json").delete()
+        }
+
+        /** Разбирает wgcf-profile.conf (с ПК). Необязательная строка `Reserved = a, b, c` поддерживается. */
+        fun parseWgcf(text: String): WarpAccount {
+            fun field(name: String): String =
+                Regex("(?im)^\\s*$name\\s*=\\s*(.+?)\\s*$").find(text)?.groupValues?.get(1)
+                    ?: error("В профиле нет поля $name")
+            val addresses = field("Address").split(",").map { it.trim().substringBefore("/") }
+            val reserved = Regex("(?i)reserved\\s*[=:]\\s*\\[?\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)")
+                .find(text)?.groupValues?.drop(1)?.map { it.toInt() } ?: emptyList()
+            return WarpAccount(
+                privateKey = field("PrivateKey"),
+                publicKey = field("PublicKey"),
+                ipv4 = addresses.firstOrNull { !it.contains(":") } ?: error("В профиле нет IPv4-адреса"),
+                ipv6 = addresses.firstOrNull { it.contains(":") } ?: error("В профиле нет IPv6-адреса"),
+                reserved = reserved,
+            )
+        }
+
         fun load(dir: File): WarpAccount? {
             val file = File(dir, "warp.json")
             if (!file.isFile) return null
@@ -73,17 +107,14 @@ data class WarpAccount(
                     ipv6 = addresses.getString("v6"),
                     reserved = clientId.take(3).map { it.toInt() and 0xFF },
                 )
-                dir.mkdirs()
-                File(dir, "warp.json").writeText(
-                    JSONObject()
-                        .put("private_key", account.privateKey)
-                        .put("public_key", account.publicKey)
-                        .put("ipv4", account.ipv4)
-                        .put("ipv6", account.ipv6)
-                        .put("reserved", org.json.JSONArray(account.reserved))
-                        .toString(),
-                )
+                account.save(dir)
                 return account
+            } catch (error: java.io.IOException) {
+                throw IllegalStateException(
+                    "Cloudflare не отвечает (${error.message}). Скорее всего оператор блокирует регистрацию WARP — " +
+                        "импортируйте wgcf-профиль с компьютера на вкладке «Профили».",
+                    error,
+                )
             } finally {
                 connection.disconnect()
             }
