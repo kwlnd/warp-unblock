@@ -22,6 +22,15 @@ pub struct Settings {
     pub strategy: usize,
     pub custom_args: String,
     pub custom: bool,
+    /// Запускать вместе с Windows: тихо, в трей, с автоподключением.
+    #[serde(default)]
+    pub autostart: bool,
+    /// Крестик сворачивает в трей, а не закрывает приложение.
+    #[serde(default = "yes")]
+    pub close_to_tray: bool,
+}
+fn yes() -> bool {
+    true
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -29,6 +38,8 @@ impl Default for Settings {
             strategy: 3,
             custom_args: String::new(),
             custom: false,
+            autostart: false,
+            close_to_tray: true,
         }
     }
 }
@@ -163,6 +174,23 @@ impl Worker {
             handle: Some(handle),
         }
     }
+    pub fn send(&self, command: Command) {
+        self.handle().send(command);
+    }
+    /// Дешёвая копия для потоков трея: отправка команд без владения воркером.
+    pub fn handle(&self) -> Handle {
+        Handle {
+            tx: self.tx.clone(),
+            cancel: self.cancel.clone(),
+        }
+    }
+}
+#[derive(Clone)]
+pub struct Handle {
+    tx: mpsc::Sender<Command>,
+    cancel: Arc<AtomicBool>,
+}
+impl Handle {
     pub fn send(&self, command: Command) {
         if matches!(command, Command::Stop | Command::Shutdown) {
             self.cancel.store(true, Ordering::Relaxed);
@@ -673,8 +701,7 @@ pub fn self_test(root: &Path) -> Result<()> {
             }
         }
         let config = fs::read_to_string(root.join("app/config/config.yaml"))?;
-        if !config.contains("  - MATCH,DIRECT") || config.contains("path: ../lists/")
-        {
+        if !config.contains("  - MATCH,DIRECT") || config.contains("path: ../lists/") {
             bail!("Config paths/default route invalid");
         }
         let job = Job::new()?;

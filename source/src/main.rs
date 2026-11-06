@@ -3,6 +3,7 @@
 mod engine;
 mod platform;
 mod strategies;
+mod tray;
 mod ui;
 
 fn main() {
@@ -24,10 +25,21 @@ fn run() -> anyhow::Result<()> {
         platform::elevate()?;
         return Ok(());
     }
-    let _instance = platform::Instance::acquire()?;
+    let tray_start = std::env::args().any(|arg| arg == "--tray");
+    let _instance = match platform::Instance::acquire() {
+        Ok(instance) => instance,
+        Err(_) => {
+            // Уже запущено (возможно, в трее): просто показываем существующее окно.
+            if platform::show_main_window(true) {
+                return Ok(());
+            }
+            anyhow::bail!("WARP Unblock уже запущен");
+        }
+    };
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([620.0, 520.0])
+            .with_visible(!tray_start)
             .with_resizable(false)
             .with_maximize_button(false)
             .with_icon(eframe::egui::IconData::default()),
@@ -37,7 +49,7 @@ fn run() -> anyhow::Result<()> {
     eframe::run_native(
         "WARP Unblock",
         options,
-        Box::new(move |cc| Ok(Box::new(ui::App::new(cc, root)))),
+        Box::new(move |cc| Ok(Box::new(ui::App::new(cc, root, tray_start)))),
     )
     .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
