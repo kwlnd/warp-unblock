@@ -36,7 +36,7 @@
 | `data/`        | локальные настройки, ключи WARP, кеш и логи; полностью исключена из Git           |
 | `source/`      | исходный код Rust, Cargo.toml и Cargo.lock                                        |
 | `tools/`       | сборка приложения и winws; временные инструменты в `.cache/`                      |
-| `docs/`        | инструкции и заметки о текущем состоянии                                          |
+| `docs/`        | инструкции, как всё устроено (`DEVELOPMENT.md`), скриншоты                        |
 
 Домены для обхода: `app/config/lists/proxy-domains.txt`; напрямую: `direct-domains.txt`. Формат `+.example.com` включает поддомены.
 
