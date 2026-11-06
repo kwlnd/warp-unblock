@@ -27,7 +27,7 @@ fn run() -> anyhow::Result<()> {
     let _instance = platform::Instance::acquire()?;
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([600.0, 440.0])
+            .with_inner_size([620.0, 520.0])
             .with_resizable(false)
             .with_maximize_button(false)
             .with_icon(eframe::egui::IconData::default()),
