@@ -28,6 +28,9 @@ pub struct Settings {
     /// Крестик сворачивает в трей, а не закрывает приложение.
     #[serde(default = "yes")]
     pub close_to_tray: bool,
+    /// «Ренат мод»: радужная кнопка и картинка на фоне (data/renat.png).
+    #[serde(default)]
+    pub renat: bool,
 }
 fn yes() -> bool {
     true
@@ -40,6 +43,7 @@ impl Default for Settings {
             custom: false,
             autostart: false,
             close_to_tray: true,
+            renat: false,
         }
     }
 }

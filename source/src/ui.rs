@@ -8,6 +8,7 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
@@ -24,6 +25,19 @@ const ON_ACCENT: Color32 = Color32::from_rgb(28, 16, 4);
 const OK: Color32 = Color32::from_rgb(76, 195, 138);
 const WARN: Color32 = Color32::from_rgb(240, 180, 41);
 const ERROR: Color32 = Color32::from_rgb(242, 102, 109);
+
+/// Ренат-мод включён: карточки чуть прозрачнее, чтобы фон был виден.
+static RENAT: AtomicBool = AtomicBool::new(false);
+
+fn surface() -> Color32 {
+    if RENAT.load(Ordering::Relaxed) {
+        Color32::from_rgba_unmultiplied(33, 35, 40, 205)
+    } else {
+        SURFACE
+    }
+}
+
+const RENAT_IMAGES: [&str; 3] = ["data/renat.png", "data/renat.jpg", "app/assets/renat.png"];
 
 pub struct App {
     root: PathBuf,
@@ -45,6 +59,8 @@ pub struct App {
     last_health: Option<Instant>,
     close_dialog: bool,
     tray: Option<tray::Tray>,
+    renat_image: Option<egui::TextureHandle>,
+    renat_loaded: bool,
     allow_close: bool,
 }
 
@@ -156,6 +172,8 @@ impl App {
             last_health: None,
             close_dialog: false,
             tray,
+            renat_image: None,
+            renat_loaded: false,
             allow_close: false,
         }
     }
@@ -203,6 +221,23 @@ impl App {
         } else {
             "Подключить"
         };
+        if self.settings.renat && !self.stopping {
+            let label = if self.running {
+                "Перестать моггать"
+            } else if self.busy {
+                "Отменить"
+            } else {
+                "Моггать"
+            };
+            if rainbow_button(ui, label) {
+                if active {
+                    self.action(Command::Stop, "Отключаю…");
+                } else {
+                    self.action(Command::Start(self.settings.clone()), "Подключаю…");
+                }
+            }
+            return;
+        }
         let fill = if active { SURFACE_HOVER } else { ACCENT };
         let text_color = if active { TEXT } else { ON_ACCENT };
         if ui
@@ -445,6 +480,14 @@ impl App {
                 ) {
                     changed = true;
                 }
+                let hint = if self.renat_image.is_some() {
+                    "Кнопка переливается, на фоне картинка"
+                } else {
+                    "Картинку положи в data/renat.png"
+                };
+                if switch_row(ui, "Ренат мод", hint, &mut self.settings.renat) {
+                    changed = true;
+                }
                 if changed {
                     let _ = self.settings.save(&self.root);
                 }
@@ -580,15 +623,31 @@ impl eframe::App for App {
             };
             tray.update(look, tip);
         }
+        let renat = self.settings.renat;
+        RENAT.store(renat, Ordering::Relaxed);
+        if renat && !self.renat_loaded {
+            self.renat_loaded = true;
+            self.renat_image = load_renat(ctx, &self.root);
+        }
+        let panel_fill = if renat {
+            Color32::from_black_alpha(120)
+        } else {
+            BACKGROUND
+        };
+        if renat {
+            paint_backdrop(ctx, self.renat_image.as_ref());
+            // Радужная кнопка анимируется, поэтому перерисовываем чаще.
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
         egui::TopBottomPanel::bottom("connection")
             .show_separator_line(false)
-            .frame(egui::Frame::new().fill(BACKGROUND).inner_margin(20.0))
+            .frame(egui::Frame::new().fill(panel_fill).inner_margin(20.0))
             .show(ctx, |ui| self.connection_button(ui));
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BACKGROUND).inner_margin(20.0))
+            .frame(egui::Frame::new().fill(panel_fill).inner_margin(20.0))
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(SURFACE)
+                    .fill(surface())
                     .stroke(egui::Stroke::new(1.0, BORDER))
                     .corner_radius(12.0)
                     .inner_margin(16.0)
@@ -732,9 +791,115 @@ fn load_results(root: &Path) -> HashMap<usize, Option<u64>> {
         .collect()
 }
 
+fn hsv(hue: f32, saturation: f32, value: f32) -> Color32 {
+    let c = egui::ecolor::Hsva::new(hue.rem_euclid(1.0), saturation, value, 1.0);
+    Color32::from(c)
+}
+
+/// Кнопка с бегущим радужным градиентом. Возвращает true по клику.
+fn rainbow_button(ui: &mut egui::Ui, label: &str) -> bool {
+    let size = egui::vec2(ui.available_width(), 56.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let time = ui.input(|input| input.time) as f32;
+    let radius = 12.0;
+    let steps = 6;
+    // Контур скруглённого прямоугольника, цвет вершины зависит от x и времени.
+    let mut ring = Vec::new();
+    let corners = [
+        (rect.right() - radius, rect.top() + radius, -90.0_f32),
+        (rect.right() - radius, rect.bottom() - radius, 0.0),
+        (rect.left() + radius, rect.bottom() - radius, 90.0),
+        (rect.left() + radius, rect.top() + radius, 180.0),
+    ];
+    for (cx, cy, start) in corners {
+        for step in 0..=steps {
+            let angle = (start + 90.0 * step as f32 / steps as f32).to_radians();
+            ring.push(egui::pos2(
+                cx + radius * angle.cos(),
+                cy + radius * angle.sin(),
+            ));
+        }
+    }
+    let boost = if response.hovered() { 1.0 } else { 0.92 };
+    let color_at = |pos: egui::Pos2| {
+        let along = (pos.x - rect.left()) / rect.width();
+        hsv(time * 0.25 - along * 0.9, 0.78, boost)
+    };
+    let mut mesh = egui::Mesh::default();
+    let center = rect.center();
+    mesh.colored_vertex(center, color_at(center));
+    for point in &ring {
+        mesh.colored_vertex(*point, color_at(*point));
+    }
+    let count = ring.len() as u32;
+    for index in 0..count {
+        mesh.add_triangle(0, 1 + index, 1 + (index + 1) % count);
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0, Color32::from_white_alpha(90)),
+        egui::StrokeKind::Inside,
+    );
+    let center = rect.center();
+    let font = egui::FontId::proportional(20.0);
+    ui.painter().text(
+        center + egui::vec2(0.0, 1.0),
+        egui::Align2::CENTER_CENTER,
+        label,
+        font.clone(),
+        Color32::from_white_alpha(110),
+    );
+    ui.painter().text(
+        center,
+        egui::Align2::CENTER_CENTER,
+        label,
+        font,
+        Color32::from_rgb(20, 10, 30),
+    );
+    response.clicked()
+}
+
+fn load_renat(ctx: &egui::Context, root: &Path) -> Option<egui::TextureHandle> {
+    let path = RENAT_IMAGES
+        .iter()
+        .map(|name| root.join(name))
+        .find(|path| path.is_file())?;
+    let image = image::open(path).ok()?.to_rgba8();
+    let size = [image.width() as usize, image.height() as usize];
+    let color = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
+    Some(ctx.load_texture("renat", color, egui::TextureOptions::LINEAR))
+}
+
+/// Тёмная подложка и картинка по центру окна (режим cover) под всеми панелями.
+fn paint_backdrop(ctx: &egui::Context, texture: Option<&egui::TextureHandle>) {
+    let painter = ctx.layer_painter(egui::LayerId::background());
+    let screen = ctx.content_rect();
+    painter.rect_filled(screen, 0.0, BACKGROUND);
+    let Some(texture) = texture else { return };
+    let tex = texture.size_vec2();
+    let scale = (screen.width() / tex.x).max(screen.height() / tex.y);
+    let shown = tex * scale;
+    // Центр кадра чуть выше середины: на портрете лицо не должно прятаться за кнопкой.
+    let rect = egui::Rect::from_center_size(
+        egui::pos2(
+            screen.center().x,
+            screen.center().y - screen.height() * 0.04,
+        ),
+        shown,
+    );
+    painter.with_clip_rect(screen).image(
+        texture.id(),
+        rect,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        Color32::from_white_alpha(150),
+    );
+}
+
 fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
-        .fill(SURFACE)
+        .fill(surface())
         .stroke(egui::Stroke::new(1.0, BORDER))
         .corner_radius(12.0)
         .inner_margin(egui::Margin::symmetric(14, 10))
