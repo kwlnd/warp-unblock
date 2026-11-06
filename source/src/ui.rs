@@ -72,7 +72,7 @@ const RENAT_ON: [&str; 6] = [
 const RENAT_OFF: [&str; 3] = [
     "data/renat-off.png",
     "data/renat-off.jpg",
-    "app/assets/renat-off.png",
+    "app/assets/renat-off.jpg",
 ];
 
 pub struct App {
