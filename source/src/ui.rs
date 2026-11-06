@@ -1,6 +1,6 @@
 use crate::{
     engine::{Command, Event, Settings, Worker},
-    platform, strategies,
+    platform, strategies, tray,
 };
 use eframe::egui::{self, Color32, RichText};
 use std::{
@@ -44,11 +44,12 @@ pub struct App {
     last_tail: Instant,
     last_health: Option<Instant>,
     close_dialog: bool,
+    tray: Option<tray::Tray>,
     allow_close: bool,
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, root: PathBuf) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, root: PathBuf, tray_start: bool) -> Self {
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = BACKGROUND;
         visuals.window_fill = SURFACE;
@@ -115,6 +116,23 @@ impl App {
         let root_for_results = root.clone();
         let worker = Worker::new(root.clone());
         worker.send(Command::Check);
+        let tray = tray::Tray::new(cc.egui_ctx.clone(), worker.handle(), root.clone());
+        if tray_start {
+            if tray.is_some() {
+                // Тихий старт из автозапуска: окно скрыто, подключаемся сразу.
+                worker.send(Command::Start(settings.clone()));
+            } else {
+                // Без иконки в трее скрытое окно не вернуть — показываем его.
+                platform::show_main_window(true);
+            }
+        }
+        if settings.autostart {
+            // Обновить путь в задаче, если папку с программой перенесли.
+            let root = root.clone();
+            std::thread::spawn(move || {
+                let _ = platform::set_autostart(true, &root);
+            });
+        }
         Self {
             root,
             worker,
@@ -137,6 +155,7 @@ impl App {
             last_tail: Instant::now(),
             last_health: None,
             close_dialog: false,
+            tray,
             allow_close: false,
         }
     }
@@ -394,6 +413,44 @@ impl App {
         );
     }
 
+    fn options(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new(RichText::new("Настройки").size(16.0).strong())
+            .id_salt("options")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.add_space(4.0);
+                let mut changed = false;
+                let mut autostart = self.settings.autostart;
+                if switch_row(
+                    ui,
+                    "Запускать вместе с Windows",
+                    "Тихо, в трее, с автоподключением",
+                    &mut autostart,
+                ) {
+                    match platform::set_autostart(autostart, &self.root) {
+                        Ok(()) => {
+                            self.settings.autostart = autostart;
+                            changed = true;
+                        }
+                        Err(error) => {
+                            self.journal(format!("Автозапуск не изменён: {error:#}"));
+                        }
+                    }
+                }
+                if switch_row(
+                    ui,
+                    "Крестик сворачивает в трей",
+                    "Выключено — крестик закрывает приложение",
+                    &mut self.settings.close_to_tray,
+                ) {
+                    changed = true;
+                }
+                if changed {
+                    let _ = self.settings.save(&self.root);
+                }
+            });
+    }
+
     fn logs(&mut self, ui: &mut egui::Ui) {
         egui::CollapsingHeader::new(RichText::new("Журнал").size(16.0).strong())
             .id_salt("journal")
@@ -489,12 +546,39 @@ impl eframe::App for App {
             self.engine_log = tail(&self.root.join("data/logs/mihomo.log"));
             self.last_tail = Instant::now();
         }
-        if ctx.input(|input| input.viewport().close_requested())
-            && (self.running || self.busy)
-            && !self.allow_close
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.close_dialog = true;
+        if tray::QUIT.load(std::sync::atomic::Ordering::Relaxed) {
+            self.allow_close = true;
+        }
+        if ctx.input(|input| input.viewport().close_requested()) && !self.allow_close {
+            if self.settings.close_to_tray && self.tray.is_some() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                platform::show_main_window(false);
+            } else if self.running || self.busy {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.close_dialog = true;
+            }
+        }
+        let healthy = self.healthy();
+        if let Some(tray) = &mut self.tray {
+            let look = if self.busy {
+                tray::Look::Busy
+            } else if healthy {
+                tray::Look::Ok
+            } else if self.running {
+                tray::Look::Error
+            } else {
+                tray::Look::Off
+            };
+            let tip = if self.busy {
+                self.status.as_str()
+            } else if self.running && healthy {
+                "Обход работает"
+            } else if self.running {
+                "Нет связи с WARP"
+            } else {
+                "Отключено"
+            };
+            tray.update(look, tip);
         }
         egui::TopBottomPanel::bottom("connection")
             .show_separator_line(false)
@@ -549,6 +633,7 @@ impl eframe::App for App {
                     .show(ui, |ui| {
                         card(ui, |ui| self.profiles(ui));
                         card(ui, |ui| self.details(ui));
+                        card(ui, |ui| self.options(ui));
                         card(ui, |ui| self.logs(ui));
                     });
             });
@@ -573,6 +658,48 @@ impl eframe::App for App {
         }
         ctx.request_repaint_after(Duration::from_millis(250));
     }
+}
+
+/// Строка с подписью и тумблером справа. Возвращает true при переключении.
+fn switch_row(ui: &mut egui::Ui, title: &str, hint: &str, value: &mut bool) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.label(RichText::new(title).size(16.0));
+            ui.label(RichText::new(hint).size(14.0).color(MUTED));
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(46.0, 26.0), egui::Sense::click());
+            if response.clicked() {
+                *value = !*value;
+                changed = true;
+            }
+            let fill = if *value { ACCENT } else { SURFACE_HOVER };
+            ui.painter().rect(
+                rect,
+                13.0,
+                fill,
+                egui::Stroke::new(1.0, if *value { ACCENT_HOVER } else { BORDER }),
+                egui::StrokeKind::Inside,
+            );
+            let knob_x = if *value {
+                rect.right() - 13.0
+            } else {
+                rect.left() + 13.0
+            };
+            ui.painter().circle_filled(
+                egui::pos2(knob_x, rect.center().y),
+                9.0,
+                if *value { ON_ACCENT } else { MUTED },
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, *value, title)
+            });
+        });
+    });
+    changed
 }
 
 /// Цвет маркера и текст строки списка: название профиля + итог подбора.

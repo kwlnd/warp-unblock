@@ -22,7 +22,10 @@ use windows_sys::Win32::{
     },
     UI::{
         Shell::{IsUserAnAdmin, ShellExecuteW},
-        WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK, SW_SHOWNORMAL},
+        WindowsAndMessaging::{
+            FindWindowW, MessageBoxW, SetForegroundWindow, ShowWindow, MB_ICONERROR, MB_OK,
+            SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL,
+        },
     },
 };
 
@@ -52,13 +55,113 @@ pub fn elevate() -> Result<()> {
             ptr::null_mut(),
             wide("runas").as_ptr(),
             wide(&exe).as_ptr(),
-            ptr::null(),
+            // Флаги вроде --tray должны пережить перезапуск с правами администратора.
+            wide(std::env::args().skip(1).collect::<Vec<_>>().join(" ")).as_ptr(),
             wide(exe.parent().unwrap()).as_ptr(),
             SW_SHOWNORMAL,
         )
     };
     if result as isize <= 32 {
         bail!("Запуск от администратора отменён или недоступен");
+    }
+    Ok(())
+}
+
+const WINDOW_TITLE: &str = "WARP Unblock";
+const TASK_NAME: &str = "WarpUnblock";
+
+/// Показывает/прячет главное окно штатными средствами Windows — без участия кадров egui,
+/// поэтому работает и когда окно скрыто в трей.
+pub fn show_main_window(show: bool) -> bool {
+    unsafe {
+        let hwnd = FindWindowW(ptr::null(), wide(WINDOW_TITLE).as_ptr());
+        if hwnd.is_null() {
+            return false;
+        }
+        if show {
+            ShowWindow(hwnd, SW_RESTORE);
+            ShowWindow(hwnd, SW_SHOW);
+            SetForegroundWindow(hwnd);
+        } else {
+            ShowWindow(hwnd, SW_HIDE);
+        }
+        true
+    }
+}
+
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn schtasks(args: &[&str]) -> Result<std::process::Output> {
+    use std::os::windows::process::CommandExt;
+    let system = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    std::process::Command::new(Path::new(&system).join("System32/schtasks.exe"))
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .context("Не удалось запустить schtasks")
+}
+
+/// Автозапуск через планировщик: задача «при входе» с наивысшими правами запускает приложение
+/// без UAC-запроса. Реестровый Run потребовал бы подтверждение при каждом входе.
+pub fn set_autostart(enable: bool, root: &Path) -> Result<()> {
+    if !enable {
+        if schtasks(&["/Query", "/TN", TASK_NAME])?.status.success() {
+            let out = schtasks(&["/Delete", "/TN", TASK_NAME, "/F"])?;
+            if !out.status.success() {
+                bail!("{}", String::from_utf8_lossy(&out.stdout).trim());
+            }
+        }
+        return Ok(());
+    }
+    let exe = std::env::current_exe()?;
+    let user = format!(
+        "{}\\{}",
+        std::env::var("USERDOMAIN").unwrap_or_default(),
+        std::env::var("USERNAME").context("Неизвестное имя пользователя")?
+    );
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>{exe}</Command><Arguments>--tray</Arguments><WorkingDirectory>{dir}</WorkingDirectory></Exec></Actions>
+</Task>"#,
+        user = xml_escape(&user),
+        exe = xml_escape(&exe.display().to_string()),
+        dir = xml_escape(&exe.parent().unwrap().display().to_string()),
+    );
+    let path = root.join("data/autostart.xml");
+    std::fs::create_dir_all(root.join("data"))?;
+    let mut bytes = vec![0xFF, 0xFE];
+    bytes.extend(xml.encode_utf16().flat_map(u16::to_le_bytes));
+    std::fs::write(&path, bytes)?;
+    let out = schtasks(&[
+        "/Create",
+        "/TN",
+        TASK_NAME,
+        "/XML",
+        &path.display().to_string(),
+        "/F",
+    ])?;
+    let _ = std::fs::remove_file(&path);
+    if !out.status.success() {
+        bail!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout).trim(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     Ok(())
 }
