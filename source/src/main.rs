@@ -28,22 +28,28 @@ fn run() -> anyhow::Result<()> {
         return Ok(());
     }
     let tray_start = std::env::args().any(|arg| arg == "--tray");
-    let _instance = match platform::Instance::acquire() {
-        Ok(instance) => instance,
-        Err(_) => {
-            // Уже запущено (возможно, в трее): просто показываем существующее окно.
-            if platform::show_main_window(true) {
-                return Ok(());
+    let preview = std::env::args().any(|arg| arg == "--preview");
+    let _instance = if preview {
+        None
+    } else {
+        Some(match platform::Instance::acquire() {
+            Ok(instance) => instance,
+            Err(_) => {
+                // Уже запущено (возможно, в трее): просто показываем существующее окно.
+                if platform::show_main_window(true) {
+                    return Ok(());
+                }
+                anyhow::bail!("WARP Unblock уже запущен");
             }
-            anyhow::bail!("WARP Unblock уже запущен");
-        }
+        })
     };
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([620.0, 520.0])
+            .with_inner_size([960.0, 760.0])
+            .with_min_inner_size([680.0, 520.0])
             .with_visible(!tray_start)
-            .with_resizable(false)
-            .with_maximize_button(false)
+            .with_resizable(true)
+            .with_maximize_button(true)
             .with_icon(eframe::egui::IconData::default()),
         centered: true,
         ..Default::default()
@@ -51,7 +57,7 @@ fn run() -> anyhow::Result<()> {
     eframe::run_native(
         "WARP Unblock",
         options,
-        Box::new(move |cc| Ok(Box::new(ui::App::new(cc, root, tray_start)))),
+        Box::new(move |cc| Ok(Box::new(ui::App::new(cc, root, tray_start, preview)))),
     )
     .map_err(|error| anyhow::anyhow!(error.to_string()))
 }

@@ -77,6 +77,7 @@ const RENAT_OFF: [&str; 3] = [
 
 pub struct App {
     root: PathBuf,
+    preview: bool,
     worker: Worker,
     settings: Settings,
     catalog: Vec<strategies::Strategy>,
@@ -103,7 +104,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, root: PathBuf, tray_start: bool) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        root: PathBuf,
+        tray_start: bool,
+        preview: bool,
+    ) -> Self {
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = BACKGROUND;
         visuals.window_fill = SURFACE;
@@ -170,8 +176,12 @@ impl App {
         let root_for_results = root.clone();
         let worker = Worker::new(root.clone());
         worker.send(Command::Check);
-        let tray = tray::Tray::new(cc.egui_ctx.clone(), worker.handle(), root.clone());
-        if tray_start {
+        let tray = if preview {
+            None
+        } else {
+            tray::Tray::new(cc.egui_ctx.clone(), worker.handle(), root.clone())
+        };
+        if tray_start && !preview {
             if tray.is_some() {
                 // Тихий старт из автозапуска: окно скрыто, подключаемся сразу.
                 worker.send(Command::Start(settings.clone()));
@@ -180,7 +190,7 @@ impl App {
                 platform::show_main_window(true);
             }
         }
-        if settings.autostart {
+        if settings.autostart && !preview {
             // Обновить путь в задаче, если папку с программой перенесли.
             let root = root.clone();
             std::thread::spawn(move || {
@@ -189,6 +199,7 @@ impl App {
         }
         Self {
             root,
+            preview,
             worker,
             settings,
             catalog,
@@ -252,6 +263,10 @@ impl App {
     }
 
     fn connection_button(&mut self, ui: &mut egui::Ui) {
+        if self.preview {
+            ui.label("Предпросмотр интерфейса · подключение недоступно");
+            return;
+        }
         if self.tools.locked() {
             ui.label("Завершите операцию с настройками…");
             return;
@@ -372,90 +387,95 @@ impl App {
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.add_space(4.0);
-                    ui.add_enabled_ui(!self.busy && !self.running && !self.tools.locked(), |ui| {
-                        egui::ComboBox::from_id_salt("strategy")
-                            .width(ui.available_width() - 12.0)
-                            .height(220.0)
-                            .selected_text(if self.settings.custom {
-                                "Свои аргументы winws"
-                            } else {
-                                &self.catalog[self.settings.strategy].name
-                            })
-                            .show_ui(ui, |ui| {
-                                for (index, profile) in self.catalog.iter().enumerate() {
-                                    let (color, label) =
-                                        mark(self.results.get(&index), &profile.name);
-                                    let selected =
-                                        !self.settings.custom && self.settings.strategy == index;
-                                    let clicked = ui
-                                        .horizontal(|ui| {
-                                            let x = ui.cursor().min.x;
-                                            ui.add_space(14.0);
-                                            let row = ui.selectable_label(selected, label);
-                                            ui.painter().circle_filled(
-                                                egui::pos2(x + 5.0, row.rect.center().y),
-                                                4.5,
-                                                color,
-                                            );
-                                            row.clicked()
-                                        })
-                                        .inner;
-                                    if clicked {
-                                        self.settings.strategy = index;
-                                        self.settings.custom = false;
+                    ui.add_enabled_ui(
+                        !self.preview && !self.busy && !self.running && !self.tools.locked(),
+                        |ui| {
+                            egui::ComboBox::from_id_salt("strategy")
+                                .width(ui.available_width() - 12.0)
+                                .height(220.0)
+                                .selected_text(if self.settings.custom {
+                                    "Свои аргументы winws"
+                                } else {
+                                    &self.catalog[self.settings.strategy].name
+                                })
+                                .show_ui(ui, |ui| {
+                                    for (index, profile) in self.catalog.iter().enumerate() {
+                                        let (color, label) =
+                                            mark(self.results.get(&index), &profile.name);
+                                        let selected = !self.settings.custom
+                                            && self.settings.strategy == index;
+                                        let clicked = ui
+                                            .horizontal(|ui| {
+                                                let x = ui.cursor().min.x;
+                                                ui.add_space(14.0);
+                                                let row = ui.selectable_label(selected, label);
+                                                ui.painter().circle_filled(
+                                                    egui::pos2(x + 5.0, row.rect.center().y),
+                                                    4.5,
+                                                    color,
+                                                );
+                                                row.clicked()
+                                            })
+                                            .inner;
+                                        if clicked {
+                                            self.settings.strategy = index;
+                                            self.settings.custom = false;
+                                        }
                                     }
+                                    ui.selectable_value(
+                                        &mut self.settings.custom,
+                                        true,
+                                        "Свои аргументы winws",
+                                    );
+                                });
+                            if self.settings.custom {
+                                ui.label("Аргументы winws");
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut self.settings.custom_args)
+                                        .desired_rows(2)
+                                        .desired_width(f32::INFINITY),
+                                );
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button("Тест профиля").clicked() {
+                                    self.action(
+                                        Command::Test(self.settings.clone()),
+                                        "Проверяю профиль…",
+                                    );
                                 }
-                                ui.selectable_value(
-                                    &mut self.settings.custom,
-                                    true,
-                                    "Свои аргументы winws",
-                                );
+                                if ui.button("Выбрать лучший").clicked() {
+                                    self.action(
+                                        Command::Best(self.settings.clone()),
+                                        "Сравниваю все профили…",
+                                    );
+                                }
+                                if ui.button("Подобрать автоматически").clicked()
+                                {
+                                    self.action(
+                                        Command::Auto(self.settings.clone()),
+                                        "Подбираю профиль WARP…",
+                                    );
+                                }
                             });
-                        if self.settings.custom {
-                            ui.label("Аргументы winws");
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.settings.custom_args)
-                                    .desired_rows(2)
-                                    .desired_width(f32::INFINITY),
-                            );
-                        }
-                        ui.horizontal_wrapped(|ui| {
-                            if ui.button("Тест профиля").clicked() {
-                                self.action(
-                                    Command::Test(self.settings.clone()),
-                                    "Проверяю профиль…",
-                                );
-                            }
-                            if ui.button("Выбрать лучший").clicked() {
-                                self.action(
-                                    Command::Best(self.settings.clone()),
-                                    "Сравниваю все профили…",
-                                );
-                            }
-                            if ui.button("Подобрать автоматически").clicked()
+                            if let Some(stat) =
+                                crate::features::stats(&self.root).get(&self.settings.strategy)
                             {
-                                self.action(
-                                    Command::Auto(self.settings.clone()),
-                                    "Подбираю профиль WARP…",
-                                );
+                                ui.label(format!(
+                                    "Успешно {}/{} · средняя задержка {} мс",
+                                    stat.successes,
+                                    stat.attempts,
+                                    stat.total_ms / stat.successes.max(1)
+                                ));
                             }
-                        });
-                        if let Some(stat) =
-                            crate::features::stats(&self.root).get(&self.settings.strategy)
-                        {
-                            ui.label(format!(
-                                "Успешно {}/{} · средняя задержка {} мс",
-                                stat.successes,
-                                stat.attempts,
-                                stat.total_ms / stat.successes.max(1)
-                            ));
-                        }
-                        ui.label(
-                            RichText::new("Проверка без TUN. Перед тестом отключите другой VPN.")
+                            ui.label(
+                                RichText::new(
+                                    "Проверка без TUN. Перед тестом отключите другой VPN.",
+                                )
                                 .size(14.0)
                                 .color(MUTED),
-                        );
-                    });
+                            );
+                        },
+                    );
                 });
         ui.painter().text(
             egui::pos2(right, response.header_response.rect.center().y),
@@ -578,7 +598,7 @@ impl App {
                         platform::open(&path);
                     }
                     if ui.button("Списки доменов").clicked() {
-                        platform::open(&self.root.join("app/config/lists"));
+                        self.tools.open_editor();
                     }
                     if ui.button("Инструкция").clicked() {
                         platform::open(&self.root.join("docs/README.md"));
@@ -783,6 +803,11 @@ impl eframe::App for App {
                         }
                     });
                 ui.add_space(8.0);
+                if ui.button("Редактировать списки проксирования").clicked()
+                {
+                    self.tools.open_editor();
+                }
+                ui.add_space(8.0);
                 egui::ScrollArea::vertical()
                     .id_salt("sections")
                     .auto_shrink([false, false])
@@ -793,6 +818,8 @@ impl eframe::App for App {
                         card(ui, |ui| self.logs(ui));
                     });
             });
+        self.tools
+            .editor_window(ctx, &self.root, self.busy || self.running);
         if self.close_dialog {
             egui::Window::new("Закрыть приложение?")
                 .collapsible(false)

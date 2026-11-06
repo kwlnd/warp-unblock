@@ -35,6 +35,7 @@ jobs:
             ~/.cargo/registry
             source/target
           key: cargo-${{ hashFiles('source/Cargo.lock') }}
+          restore-keys: cargo-
 
       - name: Тесты и сборка
         working-directory: source

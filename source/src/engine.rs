@@ -17,6 +17,47 @@ use std::{
 
 const STAGES: usize = 5;
 
+fn probe_delay(port: u16, timeout: Duration, check: impl Fn() -> Result<()>) -> Result<u64> {
+    let deadline = Instant::now() + timeout;
+    let client = reqwest::blocking::Client::builder().no_proxy().build()?;
+    loop {
+        check()?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let kernel_ms = remaining.as_millis().saturating_sub(100).max(1).to_string();
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/proxies/WARP/delay"))
+            .timeout(remaining)
+            .query(&[
+                ("timeout", kernel_ms.as_str()),
+                ("url", "https://www.gstatic.com/generate_204"),
+            ])
+            .send();
+        if let Ok(response) = response {
+            if response.status().is_success() {
+                if let Ok(value) = response.json::<serde_json::Value>() {
+                    if Instant::now() < deadline {
+                        if let Some(delay) = value["delay"].as_u64().filter(|d| *d > 0) {
+                            return Ok(delay);
+                        }
+                    }
+                }
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100).min(remaining));
+    }
+    bail!(
+        "WARP не ответил за {} с. Попробуйте другую стратегию.",
+        timeout.as_secs_f32()
+    )
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub strategy: usize,
@@ -272,7 +313,9 @@ impl Engine {
         let deadline = Instant::now() + duration;
         while Instant::now() < deadline {
             self.cancelled()?;
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(
+                Duration::from_millis(100).min(deadline.saturating_duration_since(Instant::now())),
+            );
         }
         self.cancelled()
     }
@@ -474,7 +517,7 @@ impl Engine {
         validation.extend(args.clone());
         self.log("Проверяю конфигурацию mihomo…");
         let process = self.launch("app/bin/mihomo/mihomo.exe", &validation, "validation.log")?;
-        self.wait(process, Duration::from_secs(30))?;
+        self.wait(process, Duration::from_secs(5))?;
         self.log(if test {
             "Проверяю стратегию без TUN…"
         } else {
@@ -486,7 +529,7 @@ impl Engine {
         self.running = !test;
         self.state(true, "Проверяю тоннель WARP…");
         self.stage(4, "Проверка тоннеля WARP");
-        let delay = self.delay(port, Duration::from_secs(40))?;
+        let delay = self.delay(port, Duration::from_secs(5))?;
         self.stage(STAGES, "Готово");
         self.item(2, &format!("WARP отвечает · {delay} мс"), true);
         self.log(&format!("WARP доступен, задержка {delay} мс."));
@@ -572,7 +615,6 @@ impl Engine {
                 catalog[index].name
             ));
             self.cancelled()?;
-            self.pause(Duration::from_secs(3))?;
         }
         if best {
             if let Some(index) = crate::features::best(&self.root, &candidates) {
@@ -587,12 +629,7 @@ impl Engine {
         bail!("Ни один профиль не прошёл проверку. См. data/strategy-results.json")
     }
     fn delay(&self, port: u16, timeout: Duration) -> Result<u64> {
-        let client = reqwest::blocking::Client::builder()
-            .no_proxy()
-            .timeout(Duration::from_secs(4))
-            .build()?;
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
+        let result = probe_delay(port, timeout, || {
             self.cancelled()?;
             if self
                 .children
@@ -601,29 +638,12 @@ impl Engine {
             {
                 bail!("Компонент завершился во время проверки; см. логи");
             }
-            let response = client
-                .get(format!("http://127.0.0.1:{port}/proxies/WARP/delay"))
-                .query(&[
-                    ("timeout", "3000"),
-                    ("url", "https://www.gstatic.com/generate_204"),
-                ])
-                .send();
-            if let Ok(response) = response {
-                if response.status().is_success() {
-                    if let Ok(value) = response.json::<serde_json::Value>() {
-                        if let Some(delay) = value["delay"].as_u64().filter(|d| *d > 0) {
-                            return Ok(delay);
-                        }
-                    }
-                }
-            }
-            self.pause(Duration::from_millis(300))?;
+            Ok(())
+        });
+        if result.is_err() {
+            self.item(2, "WARP не отвечает", false);
         }
-        self.item(2, "WARP не отвечает", false);
-        bail!(
-            "WARP не ответил за {} с. Попробуйте другую стратегию.",
-            timeout.as_secs()
-        )
+        result
     }
     fn check(&mut self) -> Result<()> {
         if !self.running {
@@ -647,7 +667,7 @@ impl Engine {
             self.state(false, "Отключено");
             return Ok(());
         }
-        let delay = self.delay(9090, Duration::from_secs(15))?;
+        let delay = self.delay(9090, Duration::from_secs(5))?;
         self.item(2, &format!("WARP отвечает · {delay} мс"), true);
         self.log(&format!("Проверка WARP: {delay} мс."));
         let client = reqwest::blocking::Client::builder()
@@ -679,7 +699,7 @@ impl Engine {
     }
 
     fn refresh_health(&mut self) {
-        match self.delay(9090, Duration::from_secs(6)) {
+        match self.delay(9090, Duration::from_secs(5)) {
             Ok(delay) => {
                 self.item(2, &format!("WARP отвечает · {delay} мс"), true);
                 let result = if self
@@ -916,6 +936,37 @@ pub fn self_test(root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stalled_probe_obeys_total_budget() {
+        use std::io::Read;
+        let server = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = server.local_addr().unwrap().port();
+        let worker = thread::spawn(move || {
+            let (mut socket, _) = server.accept().unwrap();
+            let _ = socket.read(&mut [0; 2048]);
+            thread::sleep(Duration::from_secs(1));
+        });
+        let started = Instant::now();
+        assert!(probe_delay(port, Duration::from_millis(250), || Ok(())).is_err());
+        assert!(started.elapsed() < Duration::from_millis(750));
+        worker.join().unwrap();
+    }
+    #[test]
+    fn available_probe_returns_immediately() {
+        use std::io::Read;
+        let server = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = server.local_addr().unwrap().port();
+        let worker = thread::spawn(move || {
+            let (mut socket, _) = server.accept().unwrap();
+            let _ = socket.read(&mut [0; 2048]);
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"delay\":42}").unwrap();
+        });
+        assert_eq!(
+            probe_delay(port, Duration::from_secs(1), || Ok(())).unwrap(),
+            42
+        );
+        worker.join().unwrap();
+    }
     #[test]
     fn custom_arguments_are_data_not_shell_commands() {
         assert_eq!(
