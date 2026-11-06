@@ -51,6 +51,7 @@ jobs:
           Copy-Item source/target/release/warp-unblock.exe "$dir/WarpUnblock.exe"
           Copy-Item app "$dir/app" -Recurse
           Copy-Item docs/README.md "$dir/README.md"
+          Copy-Item LICENSE, THIRD_PARTY.md $dir
           Compress-Archive -Path $dir -DestinationPath "dist/$name.zip" -CompressionLevel Optimal
           (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Set-Content "dist/$name.zip.sha256"
           "ZIP=dist/$name.zip" >> $env:GITHUB_ENV
