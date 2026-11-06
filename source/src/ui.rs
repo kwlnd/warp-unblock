@@ -31,18 +31,19 @@ static RENAT: AtomicBool = AtomicBool::new(false);
 
 fn surface() -> Color32 {
     if RENAT.load(Ordering::Relaxed) {
-        Color32::from_rgba_unmultiplied(33, 35, 40, 205)
+        Color32::from_rgba_unmultiplied(22, 23, 26, 150)
     } else {
         SURFACE
     }
 }
 
 /// Фон при подключении / без подключения. Свои файлы в data/ главнее встроенных в app/assets/.
-const RENAT_ON: [&str; 5] = [
+const RENAT_ON: [&str; 6] = [
     "data/renat-on.png",
     "data/renat-on.jpg",
     "data/renat.png",
     "data/renat.jpg",
+    "app/assets/renat-on.jpg",
     "app/assets/renat-on.png",
 ];
 const RENAT_OFF: [&str; 3] = [
@@ -645,7 +646,7 @@ impl eframe::App for App {
             self.renat_off = load_renat(ctx, &self.root, "renat-off", &RENAT_OFF);
         }
         let panel_fill = if renat {
-            Color32::from_black_alpha(120)
+            Color32::from_black_alpha(40)
         } else {
             BACKGROUND
         };
@@ -906,11 +907,12 @@ fn paint_backdrop(ctx: &egui::Context, texture: Option<&egui::TextureHandle>) {
     let tex = texture.size_vec2();
     let scale = (screen.width() / tex.x).max(screen.height() / tex.y);
     let shown = tex * scale;
-    // Центр кадра чуть выше середины: на портрете лицо не должно прятаться за кнопкой.
-    let rect = egui::Rect::from_center_size(
+    // Портрет в широком окне режется по высоте: прижимаем кадр вверх, чтобы лицо оставалось видно.
+    let excess = (shown.y - screen.height()).max(0.0);
+    let rect = egui::Rect::from_min_size(
         egui::pos2(
-            screen.center().x,
-            screen.center().y - screen.height() * 0.04,
+            screen.center().x - shown.x / 2.0,
+            screen.top() - excess * 0.3,
         ),
         shown,
     );
@@ -918,7 +920,7 @@ fn paint_backdrop(ctx: &egui::Context, texture: Option<&egui::TextureHandle>) {
         texture.id(),
         rect,
         egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-        Color32::from_white_alpha(150),
+        Color32::from_white_alpha(175),
     );
 }
 
