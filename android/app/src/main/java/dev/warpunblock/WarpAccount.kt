@@ -7,7 +7,10 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.SecureRandom
-import java.time.Instant
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 /** Аккаунт Cloudflare WARP (то же, что делает wgcf register). Хранится в filesDir/warp.json. */
 data class WarpAccount(
@@ -43,11 +46,20 @@ data class WarpAccount(
             val addresses = field("Address").split(",").map { it.trim().substringBefore("/") }
             val reserved = Regex("(?i)reserved\\s*[=:]\\s*\\[?\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)")
                 .find(text)?.groupValues?.drop(1)?.map { it.toInt() } ?: emptyList()
+            for (key in listOf("PrivateKey", "PublicKey")) {
+                val valid = runCatching { org.bouncycastle.util.encoders.Base64.decode(field(key)).size == 32 }.getOrDefault(false)
+                require(valid) { "Некорректное поле $key" }
+            }
+            require(reserved.all { it in 0..255 }) { "Некорректный Reserved" }
+            val ipv4 = addresses.firstOrNull { !it.contains(":") } ?: error("В профиле нет IPv4-адреса")
+            require(ipv4.split('.').size == 4 && ipv4.split('.').all { it.toIntOrNull() in 0..255 }) { "Некорректный IPv4" }
+            val ipv6 = addresses.firstOrNull { it.contains(":") } ?: error("В профиле нет IPv6-адреса")
+            require(Regex("[0-9a-fA-F:]+").matches(ipv6) && java.net.InetAddress.getByName(ipv6) is java.net.Inet6Address) { "Некорректный IPv6" }
             return WarpAccount(
                 privateKey = field("PrivateKey"),
                 publicKey = field("PublicKey"),
-                ipv4 = addresses.firstOrNull { !it.contains(":") } ?: error("В профиле нет IPv4-адреса"),
-                ipv6 = addresses.firstOrNull { it.contains(":") } ?: error("В профиле нет IPv6-адреса"),
+                ipv4 = ipv4,
+                ipv6 = ipv6,
                 reserved = reserved,
             )
         }
@@ -76,7 +88,7 @@ data class WarpAccount(
             val body = JSONObject()
                 .put("install_id", "")
                 .put("fcm_token", "")
-                .put("tos", Instant.now().toString())
+                .put("tos", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date()))
                 .put("key", publicB64)
                 .put("type", "Android")
                 .put("model", "PC")

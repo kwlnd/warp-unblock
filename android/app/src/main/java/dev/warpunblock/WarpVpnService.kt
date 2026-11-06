@@ -30,13 +30,17 @@ class WarpVpnService : VpnService() {
             shutdown(UiState())
             return START_NOT_STICKY
         }
+        if (Selector.running) { stopSelf(startId); return START_NOT_STICKY }
+        if (intent == null && !alwaysOn() && !Preferences(this).autoConnect && !Preferences(this).boot) { stopSelf(startId); return START_NOT_STICKY }
         if (worker?.isAlive != true) {
             startForegroundCompat("Подключаю…")
             stopping = false
             worker = Thread { run() }.also { it.start() }
         }
-        return START_NOT_STICKY
+        return if (alwaysOn() || Preferences(this).autoConnect || Preferences(this).boot) START_STICKY else START_NOT_STICKY
     }
+
+    private fun alwaysOn() = android.os.Build.VERSION.SDK_INT >= 29 && isAlwaysOn
 
     private fun run() {
         try {
@@ -50,6 +54,7 @@ class WarpVpnService : VpnService() {
                     AppState.log(it)
                 }
             }
+            if (stopping) return
             val strategies = Strategies.load(this)
             val strategy = strategies[AppState.strategyIndex.value.coerceIn(strategies.indices)]
             AppState.log("Профиль: ${strategy.name}")
@@ -57,8 +62,9 @@ class WarpVpnService : VpnService() {
             val process = core.start(false)
             mihomo = process
             AppState.set(UiState(Phase.BUSY, "Подключаю…", "Проверяю тоннель WARP"))
-            val delay = core.waitDelay(Core.API_PORT, 40) { process.isAlive && !stopping }
+            val delay = core.waitDelay(Core.API_PORT, 40) { process.runningCompat() && !stopping }
             if (stopping) return
+            ProfileStats.record(this, AppState.strategyIndex.value, delay)
             if (delay == null) {
                 error("WARP не ответил. Попробуйте другой профиль или автоподбор.\n" + core.logTail(8))
             }
@@ -87,7 +93,21 @@ class WarpVpnService : VpnService() {
             .addRoute("0.0.0.0", 0)
             .addRoute("::", 0)
             .addDnsServer("1.1.1.1")
-            .addDisallowedApplication(packageName)
+        val preferences = Preferences(this)
+        val installed = preferences.apps.filter { pkg ->
+            pkg != packageName && runCatching { packageManager.getApplicationInfo(pkg, 0) }.isSuccess
+        }
+        when (preferences.appMode) {
+            "allow" -> {
+                check(installed.isNotEmpty()) { "Выберите хотя бы одно установленное приложение для VPN" }
+                installed.forEach { builder.addAllowedApplication(it) }
+            }
+            "exclude" -> {
+                builder.addDisallowedApplication(packageName)
+                installed.forEach { builder.addDisallowedApplication(it) }
+            }
+            else -> builder.addDisallowedApplication(packageName)
+        }
         val fd = builder.establish() ?: error("Система не выдала VPN-интерфейс (разрешение отозвано?)")
         tun = fd
         val config = File(filesDir, "hev.yml")
@@ -114,7 +134,7 @@ class WarpVpnService : VpnService() {
     /** Проверка тоннеля раз в 30 секунд; ошибка проверки тоннель не рвёт. */
     private fun health(core: Core, process: Process) {
         var counter = 0
-        while (!stopping && process.isAlive) {
+        while (!stopping && process.runningCompat()) {
             Thread.sleep(1000)
             runCatching {
                 val stats = tproxy?.TProxyGetStats()
@@ -122,7 +142,7 @@ class WarpVpnService : VpnService() {
             }
             if (++counter < 30) continue
             counter = 0
-            val delay = core.waitDelay(Core.API_PORT, 12) { process.isAlive && !stopping }
+            val delay = core.waitDelay(Core.API_PORT, 12) { process.runningCompat() && !stopping }
             if (stopping) return
             AppState.delay.value = delay
             AppState.set(
@@ -145,7 +165,7 @@ class WarpVpnService : VpnService() {
         tproxy = null
         runCatching { tun?.close() }
         tun = null
-        mihomo?.destroyForcibly()
+        mihomo?.stopCompat()
         mihomo = null
         AppState.since.value = null
         AppState.delay.value = null
@@ -160,15 +180,17 @@ class WarpVpnService : VpnService() {
         stopping = true
         runCatching { tproxy?.TProxyStopService() }
         runCatching { tun?.close() }
-        mihomo?.destroyForcibly()
+        mihomo?.stopCompat()
         super.onDestroy()
     }
 
     private fun notification(text: String): Notification {
         val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL, "Подключение", NotificationManager.IMPORTANCE_LOW),
-        )
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            manager.createNotificationChannel(
+                NotificationChannel(CHANNEL, "Подключение", NotificationManager.IMPORTANCE_LOW),
+            )
+        }
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -190,7 +212,7 @@ class WarpVpnService : VpnService() {
     private fun startForegroundCompat(text: String) {
         ServiceCompat.startForeground(
             this, NOTIFICATION_ID, notification(text),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            if (android.os.Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0,
         )
     }
 

@@ -86,7 +86,7 @@ jobs:
         env:
           VERSION_NAME: ${{ steps.ver.outputs.name }}
           VERSION_CODE: ${{ github.run_number }}
-        run: gradle -p android assembleRelease --no-daemon
+        run: gradle -p android testDebugUnitTest assembleRelease lintRelease --no-daemon
 
       - name: Собрать файлы релиза
         run: |

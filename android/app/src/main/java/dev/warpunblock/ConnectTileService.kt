@@ -52,6 +52,8 @@ class ConnectTileService : TileService() {
         }
     }
 
+    // PendingIntent overload exists only on API 34; Intent overload serves API 24–33.
+    @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
     private fun openApp() {
         val intent = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

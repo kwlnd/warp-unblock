@@ -16,14 +16,15 @@ object Selector {
         cancelled = true
     }
 
-    fun start(context: Context) {
-        if (running) return
+    fun start(context: Context, best: Boolean = false) {
+        AppState.init(context)
+        if (running || AppState.ui.value.phase == Phase.CONNECTED || AppState.ui.value.phase == Phase.BUSY) return
         cancelled = false
         val app = context.applicationContext
-        thread = Thread { run(app) }.also { it.start() }
+        thread = Thread { run(app, best) }.also { it.start() }
     }
 
-    private fun run(context: Context) {
+    private fun run(context: Context, best: Boolean) {
         var process: Process? = null
         try {
             val core = Core(context)
@@ -53,21 +54,31 @@ object Selector {
                 core.writeProfile(strategy, account)
                 val test = core.start(true)
                 process = test
-                val delay = core.waitDelay(Core.TEST_API_PORT, 25) { test.isAlive && !cancelled }
-                test.destroyForcibly()
+                val delay = core.waitDelay(Core.TEST_API_PORT, 25) { test.runningCompat() && !cancelled }
+                test.stopCompat()
                 test.waitFor()
                 process = null
+                if (cancelled) break
+                ProfileStats.record(context, index, delay)
                 results[index] = delay ?: 0
                 if (delay == null) failed++
                 AppState.saveResults(AppState.results.value + results)
-                if (delay != null) {
+                if (delay != null && !best) {
                     AppState.selectStrategy(index)
                     AppState.log("Рабочий профиль: ${strategy.name} ($delay мс)")
                     AppState.set(UiState(Phase.IDLE, "Профиль WARP подобран", "${strategy.name} · $delay мс"))
                     return
                 }
-                AppState.log("Не прошёл: ${strategy.name}")
+                AppState.log("${if (delay != null) "Прошёл" else "Не прошёл"}: ${strategy.name}")
                 if (!cancelled) Thread.sleep(2000)
+            }
+            if (best && !cancelled) {
+                val index = ProfileStats.best(context, results.filterValues { it > 0 })
+                if (index != null) {
+                    AppState.selectStrategy(index)
+                    AppState.set(UiState(Phase.IDLE, "Лучший профиль сохранён", "${strategies[index].name} · ${results[index]} мс"))
+                    return
+                }
             }
             AppState.set(
                 if (cancelled) UiState() else UiState(
@@ -79,7 +90,7 @@ object Selector {
             AppState.log("Ошибка подбора: ${error.message}")
             AppState.set(UiState(Phase.ERROR, "Подбор не удался", error.message ?: ""))
         } finally {
-            process?.destroyForcibly()
+            process?.stopCompat()
         }
     }
 }

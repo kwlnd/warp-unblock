@@ -14,8 +14,8 @@ class Core(private val context: Context) {
         home.mkdirs()
         File(home, "lists").mkdirs()
         copyAsset("config.yaml", File(home, "config.yaml"))
-        copyAsset("lists/proxy-domains.txt", File(home, "lists/proxy-domains.txt"))
-        copyAsset("lists/direct-domains.txt", File(home, "lists/direct-domains.txt"))
+        if (!File(home, "lists/proxy-domains.txt").exists()) copyAsset("lists/proxy-domains.txt", File(home, "lists/proxy-domains.txt"))
+        if (!File(home, "lists/direct-domains.txt").exists()) copyAsset("lists/direct-domains.txt", File(home, "lists/direct-domains.txt"))
         File(home, "test.yaml").writeText(
             """
             mixed-port: $TEST_PROXY_PORT
@@ -76,9 +76,7 @@ class Core(private val context: Context) {
             File(home, if (test) "test.yaml" else "config.yaml").absolutePath,
         )
             .directory(home)
-            .redirectErrorStream(true)
-            .redirectOutput(log)
-            .start()
+            .logged(log)
     }
 
     /** Ждёт ответа WARP через delay-тест ядра. Возвращает задержку в мс или null по таймауту. */
@@ -111,7 +109,14 @@ class Core(private val context: Context) {
     fun logTail(lines: Int = 40): String {
         val file = File(home, "mihomo.log")
         if (!file.isFile) return ""
-        return file.readLines().takeLast(lines).joinToString("\n")
+        return java.io.RandomAccessFile(file, "r").use { input ->
+            val offset = (input.length() - 64 * 1024).coerceAtLeast(0)
+            input.seek(offset)
+            val bytes = ByteArray((input.length() - offset).toInt())
+            input.readFully(bytes)
+            val text = bytes.toString(Charsets.UTF_8)
+            (if (offset > 0) text.substringAfter('\n', "") else text).lineSequence().toList().takeLast(lines).joinToString("\n")
+        }
     }
 
     private fun copyAsset(name: String, target: File) {

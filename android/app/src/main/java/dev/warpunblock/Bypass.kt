@@ -40,10 +40,10 @@ object Bypass {
             report("Обход DPI для регистрации: ${index + 1}/${STRATEGIES.size}")
             val process = ProcessBuilder(
                 listOf(binary.absolutePath, "--ip", "127.0.0.1", "--port", "$PORT") + args,
-            ).redirectErrorStream(true).redirectOutput(log).start()
+            ).logged(log)
             try {
                 Thread.sleep(500)
-                if (!process.isAlive) continue
+                if (!process.runningCompat()) continue
                 val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", PORT))
                 val account = WarpAccount.register(dir, proxy, 10_000)
                 AppState.log("Регистрация прошла с обходом DPI: ${args.joinToString(" ")}")
@@ -51,7 +51,7 @@ object Bypass {
             } catch (error: Exception) {
                 last = error
             } finally {
-                process.destroyForcibly()
+                process.stopCompat()
             }
         }
         throw IllegalStateException(

@@ -69,6 +69,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.delay
 
 private val Brand = Color(0xFFF6821F)
@@ -112,6 +114,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         AppState.init(this)
         connectIfRequested()
+        if (Preferences(this).autoConnect && VpnService.prepare(this) == null && AppState.ui.value.phase == Phase.IDLE) startVpn()
         setContent {
             WarpTheme {
                 Screen(
@@ -168,7 +171,7 @@ private fun Screen(onToggle: () -> Unit, onAuto: () -> Unit) {
         },
         bottomBar = {
             NavigationBar {
-                listOf("Панель", "Профили", "Журнал").forEachIndexed { index, title ->
+                listOf("Панель", "Профили", "Журнал", "Настройки").forEachIndexed { index, title ->
                     NavigationBarItem(
                         selected = tab == index,
                         onClick = { tab = index },
@@ -192,7 +195,8 @@ private fun Screen(onToggle: () -> Unit, onAuto: () -> Unit) {
             when (tab) {
                 0 -> Dashboard(ui)
                 1 -> Profiles(ui, onAuto)
-                else -> LogPage()
+                2 -> LogPage()
+                else -> SettingsPage(active)
             }
         }
     }
@@ -266,11 +270,20 @@ private fun NavIcon(index: Int, color: Color) {
                     drawLine(color, Offset(size.width * 0.34f, y), Offset(size.width * 0.9f, y), 2.4f)
                 }
             }
-            else -> {
+            2 -> {
                 drawRoundRect(color, Offset(size.width * 0.2f, size.height * 0.1f), Size(size.width * 0.6f, size.height * 0.8f), CornerRadius(5f), style = stroke)
                 for (row in 0..2) {
                     val y = size.height * (0.34f + 0.18f * row)
                     drawLine(color, Offset(size.width * 0.34f, y), Offset(size.width * 0.66f, y), 2.2f)
+                }
+            }
+            else -> {
+                drawCircle(color, size.width * 0.3f, center, style = stroke)
+                drawCircle(color, size.width * 0.1f, center, style = stroke)
+                for (i in 0..7) {
+                    val a = i * kotlin.math.PI / 4
+                    val direction = Offset(kotlin.math.cos(a).toFloat(), kotlin.math.sin(a).toFloat())
+                    drawLine(color, center + direction * (size.width * 0.3f), center + direction * (size.width * 0.43f), 2.4f)
                 }
             }
         }
@@ -385,6 +398,13 @@ private fun Profiles(ui: UiState, onAuto: () -> Unit) {
     val locked = ui.phase == Phase.BUSY || ui.phase == Phase.CONNECTED
     val scheme = MaterialTheme.colorScheme
     var hasAccount by remember { mutableStateOf(WarpAccount.load(context.filesDir) != null) }
+    val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
+        result.contents?.let { text ->
+            runCatching { WarpAccount.parseWgcf(text).save(context.filesDir) }
+                .onSuccess { hasAccount = true; AppState.log("Профиль WARP импортирован из QR"); AppState.set(UiState(Phase.IDLE, "Профиль импортирован")) }
+                .onFailure { AppState.set(UiState(Phase.ERROR, "QR не содержит профиль WARP", it.message ?: "")) }
+        }
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching {
@@ -427,6 +447,10 @@ private fun Profiles(ui: UiState, onAuto: () -> Unit) {
             }
         }
     }
+    FilledTonalButton(onClick = { scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt("Профиль WARP с компьютера").setBeepEnabled(false)) }, enabled = !locked) { Text("Импортировать QR") }
+    FilledTonalButton(onClick = { Selector.start(context, best = true) }, enabled = !locked, modifier = Modifier.fillMaxWidth()) { Text("Сравнить все и выбрать лучший") }
+    val stats = ProfileStats.load(context)[index]
+    if (stats != null) Text("Успешно ${stats.successes}/${stats.attempts} · средняя задержка ${stats.totalMs / stats.successes.coerceAtLeast(1)} мс")
     FilledTonalButton(
         onClick = onAuto,
         enabled = !locked,
@@ -476,6 +500,13 @@ private fun Profiles(ui: UiState, onAuto: () -> Unit) {
 @Composable
 private fun LogPage() {
     val logs by AppState.logs.collectAsState()
+    val context = LocalContext.current
+    FilledTonalButton(onClick = {
+        val text = "WARP Unblock Android ${BuildConfig.VERSION_NAME}\n" + logs.joinToString("\n") + "\n\n" + Core(context).logTail(120)
+        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"; putExtra(Intent.EXTRA_SUBJECT, "Журнал WARP Unblock"); putExtra(Intent.EXTRA_TEXT, text)
+        }, "Поделиться журналом"))
+    }) { Text("Поделиться журналом") }
     Tile {
         Text("Журнал", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
         if (logs.isEmpty()) {
