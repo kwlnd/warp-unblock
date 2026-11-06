@@ -37,7 +37,19 @@ fn surface() -> Color32 {
     }
 }
 
-const RENAT_IMAGES: [&str; 3] = ["data/renat.png", "data/renat.jpg", "app/assets/renat.png"];
+/// Фон при подключении / без подключения. Свои файлы в data/ главнее встроенных в app/assets/.
+const RENAT_ON: [&str; 5] = [
+    "data/renat-on.png",
+    "data/renat-on.jpg",
+    "data/renat.png",
+    "data/renat.jpg",
+    "app/assets/renat-on.png",
+];
+const RENAT_OFF: [&str; 3] = [
+    "data/renat-off.png",
+    "data/renat-off.jpg",
+    "app/assets/renat-off.png",
+];
 
 pub struct App {
     root: PathBuf,
@@ -59,7 +71,8 @@ pub struct App {
     last_health: Option<Instant>,
     close_dialog: bool,
     tray: Option<tray::Tray>,
-    renat_image: Option<egui::TextureHandle>,
+    renat_on: Option<egui::TextureHandle>,
+    renat_off: Option<egui::TextureHandle>,
     renat_loaded: bool,
     allow_close: bool,
 }
@@ -172,7 +185,8 @@ impl App {
             last_health: None,
             close_dialog: false,
             tray,
-            renat_image: None,
+            renat_on: None,
+            renat_off: None,
             renat_loaded: false,
             allow_close: false,
         }
@@ -480,10 +494,10 @@ impl App {
                 ) {
                     changed = true;
                 }
-                let hint = if self.renat_image.is_some() {
-                    "Кнопка переливается, на фоне картинка"
+                let hint = if self.renat_on.is_some() || self.renat_off.is_some() {
+                    "Радужная кнопка, фон зависит от подключения"
                 } else {
-                    "Картинку положи в data/renat.png"
+                    "Свои картинки: data/renat-on.png и renat-off.png"
                 };
                 if switch_row(ui, "Ренат мод", hint, &mut self.settings.renat) {
                     changed = true;
@@ -627,7 +641,8 @@ impl eframe::App for App {
         RENAT.store(renat, Ordering::Relaxed);
         if renat && !self.renat_loaded {
             self.renat_loaded = true;
-            self.renat_image = load_renat(ctx, &self.root);
+            self.renat_on = load_renat(ctx, &self.root, "renat-on", &RENAT_ON);
+            self.renat_off = load_renat(ctx, &self.root, "renat-off", &RENAT_OFF);
         }
         let panel_fill = if renat {
             Color32::from_black_alpha(120)
@@ -635,7 +650,12 @@ impl eframe::App for App {
             BACKGROUND
         };
         if renat {
-            paint_backdrop(ctx, self.renat_image.as_ref());
+            let backdrop = if self.running {
+                self.renat_on.as_ref()
+            } else {
+                self.renat_off.as_ref()
+            };
+            paint_backdrop(ctx, backdrop);
             // Радужная кнопка анимируется, поэтому перерисовываем чаще.
             ctx.request_repaint_after(Duration::from_millis(33));
         }
@@ -861,15 +881,20 @@ fn rainbow_button(ui: &mut egui::Ui, label: &str) -> bool {
     response.clicked()
 }
 
-fn load_renat(ctx: &egui::Context, root: &Path) -> Option<egui::TextureHandle> {
-    let path = RENAT_IMAGES
+fn load_renat(
+    ctx: &egui::Context,
+    root: &Path,
+    name: &str,
+    candidates: &[&str],
+) -> Option<egui::TextureHandle> {
+    let path = candidates
         .iter()
         .map(|name| root.join(name))
         .find(|path| path.is_file())?;
     let image = image::open(path).ok()?.to_rgba8();
     let size = [image.width() as usize, image.height() as usize];
     let color = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
-    Some(ctx.load_texture("renat", color, egui::TextureOptions::LINEAR))
+    Some(ctx.load_texture(name, color, egui::TextureOptions::LINEAR))
 }
 
 /// Тёмная подложка и картинка по центру окна (режим cover) под всеми панелями.
