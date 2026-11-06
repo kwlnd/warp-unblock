@@ -49,11 +49,19 @@
 
 ## Выполнено локально 2026-11-06 после синхронизации GitHub
 
-- Windows: `origin/main` обновлён до `dc7bf76`; Android получен из `origin/android` (`33daefe`). Локальные изменения: ветки `codex/github-plans` и `codex/android-plans`; Android worktree — `.android-work/`. Push не выполнялся.
+- Windows: `origin/main` обновлён до `dc7bf76`; Android получен из `origin/android` (`33daefe`). Локальные изменения: ветки `codex/github-plans` и `codex/android-plans`; Android worktree — `.android-work/`. Разработка сначала сохранена локально; последующая публикация описана ниже.
 - Существующий локальный Opera-код совмещён с новым UI, треем и автозапуском по указанию пользователя. Исходный снимок сохранён в git stash `local Opera work before GitHub sync 2026-11-06`; запасные локальные файлы — `.local-backup/`.
 - Все безусловные пункты разработки выше реализованы. Общий формат описан в `DOMAIN-LISTS.md`. В Windows редактор включает дополнительный AI-список Opera; в Android AI по-прежнему идёт через WARP.
 - Windows: проверены форматирование, 10 unit-тестов, Clippy с `-D warnings`, release build и native `--self-test`. Через computer-use проверены новые настройки/редактор, отсутствие TUN при preview и реальный запрос обновлений GitHub. Live WARP/Opera/AI/TUN не проверялись.
 - Android: JDK 17, Gradle 8.9, SDK 34 скачаны в `tools/.cache/android-build/`. Прошли 3 unit-теста (списки, версии, импорт wgcf из QR), обе release APK и Android Lint (0 ошибок; предупреждения об исходных зависимостях/иконках). Исправлены прежние API26-вызовы при заявленном minSdk24. Нативные библиотеки взяты из собственного `android-v0.2.0`, APK проверены по опубликованному SHA256SUMS.txt; ядра не пересобирались.
 - Новые Android-функции на физическом телефоне не проверены: выбор приложений, перезагрузка, Always-on/kill switch, камера QR и отправка журнала требуют ручной проверки. Полный WARP/Opera TUN-тест Windows также остаётся ручным.
 - GitHub уже PUBLIC (проверено через API). Удалены 12 старых релизов, оставлены `v0.4.4` и `android-v0.2.0`; git-теги сохранены. Полные проверенные архивы и метаданные — `dist/release-backups/`. Скрипт `tools/prune-releases.ps1` по умолчанию выводит только план.
-- Собранные новые EXE/ZIP/APK находятся локально. Новые релизы не опубликованы.
+- Собранные EXE/ZIP/APK находятся локально; опубликованные файлы дополнительно скачаны и проверены в `dist/published/`.
+
+## Публикация по запросу пользователя
+
+- Ветки `main` и `android` отправлены на GitHub без force push. Windows-код: `bf36de7`, тег `v0.5.0`; Android-код: `f870f56`, тег `android-v0.3.0`.
+- GitHub Actions выполнил сборки и опубликовал [Windows v0.5.0](https://github.com/kwlnd/warp-unblock/releases/tag/v0.5.0) и [Android v0.3.0](https://github.com/kwlnd/warp-unblock/releases/tag/android-v0.3.0). Windows: ZIP и SHA-256; Android: два APK и SHA256SUMS.txt. Описания релизов дополнены изменениями и границами проверок.
+- Опубликованные файлы скачаны обратно, SHA-256 совпали. В Windows ZIP есть Opera, папки `data/` с локальными ключами нет.
+- После выпуска сохранены резервные копии предыдущих `v0.4.4` и `android-v0.2.0`, сами старые релизы удалены. Теперь оставлено по одному актуальному релизу каждой платформы; git-теги сохранены.
+- Ручные проверки живого VPN и новых Android-функций остаются актуальными, публикация их не заменяет.
