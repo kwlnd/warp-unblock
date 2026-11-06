@@ -108,7 +108,7 @@ class WarpVpnService : VpnService() {
         )
         val service = TProxyService()
         tproxy = service
-        if (!service.TProxyStartService(config.absolutePath, fd.fd)) error("Не запустился tun2socks")
+        service.TProxyStartService(config.absolutePath, fd.fd)
     }
 
     /** Проверка тоннеля раз в 30 секунд; ошибка проверки тоннель не рвёт. */

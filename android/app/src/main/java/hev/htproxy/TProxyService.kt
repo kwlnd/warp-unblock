@@ -5,9 +5,9 @@ package hev.htproxy
  * библиотеке (JNI RegisterNatives), менять их нельзя.
  */
 class TProxyService {
-    external fun TProxyStartService(configPath: String, fd: Int): Boolean
-    external fun TProxyStopService(): Boolean
-    external fun TProxyIsRunning(): Boolean
+    // Сигнатуры как в hev-socks5-tunnel 2.9.3 (void, void, long[]) — иначе RegisterNatives не найдёт методы.
+    external fun TProxyStartService(configPath: String, fd: Int)
+    external fun TProxyStopService()
     external fun TProxyGetStats(): LongArray
 
     companion object {
