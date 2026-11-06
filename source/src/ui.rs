@@ -8,7 +8,7 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
     time::{Duration, Instant},
 };
 
@@ -28,6 +28,29 @@ const ERROR: Color32 = Color32::from_rgb(242, 102, 109);
 
 /// Ренат-мод включён: карточки чуть прозрачнее, чтобы фон был виден.
 static RENAT: AtomicBool = AtomicBool::new(false);
+/// Текущий оттенок «RGB» (0..1), обновляется каждый кадр.
+static RENAT_HUE: AtomicU32 = AtomicU32::new(0);
+
+fn hue() -> f32 {
+    f32::from_bits(RENAT_HUE.load(Ordering::Relaxed))
+}
+
+/// Акцентный цвет: обычный оранжевый или бегущий по кругу RGB в Ренат-моде.
+fn accent() -> Color32 {
+    if RENAT.load(Ordering::Relaxed) {
+        hsv(hue(), 0.9, 1.0)
+    } else {
+        ACCENT
+    }
+}
+
+fn border() -> Color32 {
+    if RENAT.load(Ordering::Relaxed) {
+        hsv(hue(), 0.85, 0.95)
+    } else {
+        BORDER
+    }
+}
 
 fn surface() -> Color32 {
     if RENAT.load(Ordering::Relaxed) {
@@ -285,7 +308,7 @@ impl App {
         let bar = |ui: &mut egui::Ui, fraction: f32, height: f32| {
             ui.add(
                 egui::ProgressBar::new(fraction.clamp(0.0, 1.0))
-                    .fill(ACCENT)
+                    .fill(accent())
                     .desired_height(height)
                     .corner_radius(height / 2.0),
             );
@@ -640,6 +663,15 @@ impl eframe::App for App {
         }
         let renat = self.settings.renat;
         RENAT.store(renat, Ordering::Relaxed);
+        let hue_now = (ctx.input(|input| input.time) as f32 * 0.25).rem_euclid(1.0);
+        RENAT_HUE.store(hue_now.to_bits(), Ordering::Relaxed);
+        ctx.style_mut(|style| {
+            let color = accent();
+            style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, color);
+            style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, color);
+            style.visuals.selection.stroke = egui::Stroke::new(1.0, color);
+            style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, border());
+        });
         if renat && !self.renat_loaded {
             self.renat_loaded = true;
             self.renat_on = load_renat(ctx, &self.root, "renat-on", &RENAT_ON);
@@ -669,7 +701,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(surface())
-                    .stroke(egui::Stroke::new(1.0, BORDER))
+                    .stroke(egui::Stroke::new(1.0, border()))
                     .corner_radius(12.0)
                     .inner_margin(16.0)
                     .show(ui, |ui| {
@@ -756,12 +788,12 @@ fn switch_row(ui: &mut egui::Ui, title: &str, hint: &str, value: &mut bool) -> b
                 *value = !*value;
                 changed = true;
             }
-            let fill = if *value { ACCENT } else { SURFACE_HOVER };
+            let fill = if *value { accent() } else { SURFACE_HOVER };
             ui.painter().rect(
                 rect,
                 13.0,
                 fill,
-                egui::Stroke::new(1.0, if *value { ACCENT_HOVER } else { BORDER }),
+                egui::Stroke::new(1.0, if *value { accent() } else { border() }),
                 egui::StrokeKind::Inside,
             );
             let knob_x = if *value {
@@ -817,67 +849,33 @@ fn hsv(hue: f32, saturation: f32, value: f32) -> Color32 {
     Color32::from(c)
 }
 
-/// Кнопка с бегущим радужным градиентом. Возвращает true по клику.
+/// Кнопка целиком мигает всеми цветами RGB (без градиента). Возвращает true по клику.
 fn rainbow_button(ui: &mut egui::Ui, label: &str) -> bool {
     let size = egui::vec2(ui.available_width(), 56.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let time = ui.input(|input| input.time) as f32;
-    let radius = 12.0;
-    let steps = 6;
-    // Контур скруглённого прямоугольника, цвет вершины зависит от x и времени.
-    let mut ring = Vec::new();
-    let corners = [
-        (rect.right() - radius, rect.top() + radius, -90.0_f32),
-        (rect.right() - radius, rect.bottom() - radius, 0.0),
-        (rect.left() + radius, rect.bottom() - radius, 90.0),
-        (rect.left() + radius, rect.top() + radius, 180.0),
-    ];
-    for (cx, cy, start) in corners {
-        for step in 0..=steps {
-            let angle = (start + 90.0 * step as f32 / steps as f32).to_radians();
-            ring.push(egui::pos2(
-                cx + radius * angle.cos(),
-                cy + radius * angle.sin(),
-            ));
-        }
-    }
-    let boost = if response.hovered() { 1.0 } else { 0.92 };
-    let color_at = |pos: egui::Pos2| {
-        let along = (pos.x - rect.left()) / rect.width();
-        hsv(time * 0.25 - along * 0.9, 0.78, boost)
-    };
-    let mut mesh = egui::Mesh::default();
-    let center = rect.center();
-    mesh.colored_vertex(center, color_at(center));
-    for point in &ring {
-        mesh.colored_vertex(*point, color_at(*point));
-    }
-    let count = ring.len() as u32;
-    for index in 0..count {
-        mesh.add_triangle(0, 1 + index, 1 + (index + 1) % count);
-    }
-    ui.painter().add(egui::Shape::mesh(mesh));
-    ui.painter().rect_stroke(
+    let value = if response.hovered() { 1.0 } else { 0.92 };
+    let fill = hsv(hue(), 0.95, value);
+    ui.painter().rect(
         rect,
-        radius,
-        egui::Stroke::new(1.0, Color32::from_white_alpha(90)),
+        12.0,
+        fill,
+        egui::Stroke::new(2.0, Color32::from_white_alpha(120)),
         egui::StrokeKind::Inside,
     );
-    let center = rect.center();
     let font = egui::FontId::proportional(20.0);
     ui.painter().text(
-        center + egui::vec2(0.0, 1.0),
+        rect.center() + egui::vec2(0.0, 1.0),
         egui::Align2::CENTER_CENTER,
         label,
         font.clone(),
         Color32::from_white_alpha(110),
     );
     ui.painter().text(
-        center,
+        rect.center(),
         egui::Align2::CENTER_CENTER,
         label,
         font,
-        Color32::from_rgb(20, 10, 30),
+        Color32::from_rgb(15, 10, 25),
     );
     response.clicked()
 }
@@ -927,7 +925,7 @@ fn paint_backdrop(ctx: &egui::Context, texture: Option<&egui::TextureHandle>) {
 fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
         .fill(surface())
-        .stroke(egui::Stroke::new(1.0, BORDER))
+        .stroke(egui::Stroke::new(1.0, border()))
         .corner_radius(12.0)
         .inner_margin(egui::Margin::symmetric(14, 10))
         .show(ui, |ui| {
