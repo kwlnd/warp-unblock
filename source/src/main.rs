@@ -1,6 +1,8 @@
 #![windows_subsystem = "windows"]
 
 mod engine;
+mod features;
+mod opera;
 mod platform;
 mod strategies;
 mod tray;

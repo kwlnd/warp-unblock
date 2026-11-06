@@ -1,5 +1,5 @@
 use crate::platform::{self, Job, Process};
-use crate::strategies;
+use crate::{opera, strategies};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -68,6 +68,7 @@ pub enum Command {
     Start(Settings),
     Test(Settings),
     Auto(Settings),
+    Best(Settings),
     Check,
     Stop,
     Shutdown,
@@ -106,6 +107,7 @@ impl Worker {
                 cancel: stop,
                 job: None,
                 children: Vec::new(),
+                opera: None,
                 running: false,
             };
             let mut last_health = Instant::now();
@@ -119,10 +121,12 @@ impl Worker {
                     Ok(Command::Start(settings))
                     | Ok(Command::Test(settings))
                     | Ok(Command::Auto(settings))
-                        if engine.running =>
+                    | Ok(Command::Best(settings))
+                        if engine.running
+                            || crate::features::FILES_BUSY.load(Ordering::Acquire) =>
                     {
                         let _ = settings;
-                        engine.log("Сначала остановите текущее подключение.");
+                        engine.log("Завершите текущую операцию или остановите подключение.");
                     }
                     Ok(command) => {
                         engine.cancel.store(false, Ordering::Relaxed);
@@ -130,7 +134,8 @@ impl Worker {
                         let result = match command {
                             Command::Start(settings) => engine.start(settings, false),
                             Command::Test(settings) => engine.start(settings, true),
-                            Command::Auto(settings) => engine.auto_select(settings),
+                            Command::Auto(settings) => engine.auto_select(settings, false),
+                            Command::Best(settings) => engine.auto_select(settings, true),
                             Command::Check => engine.check(),
                             _ => unreachable!(),
                         };
@@ -196,6 +201,14 @@ pub struct Handle {
 }
 impl Handle {
     pub fn send(&self, command: Command) {
+        if crate::features::FILES_BUSY.load(Ordering::Acquire)
+            && matches!(
+                command,
+                Command::Start(_) | Command::Test(_) | Command::Auto(_) | Command::Best(_)
+            )
+        {
+            return;
+        }
         if matches!(command, Command::Stop | Command::Shutdown) {
             self.cancel.store(true, Ordering::Relaxed);
         }
@@ -218,6 +231,7 @@ struct Engine {
     cancel: Arc<AtomicBool>,
     job: Option<Job>,
     children: Vec<Process>,
+    opera: Option<Process>,
     running: bool,
 }
 impl Engine {
@@ -362,7 +376,12 @@ impl Engine {
     }
     fn start_inner(&mut self, settings: &Settings, test: bool) -> Result<u64> {
         let port = if test { 9091 } else { 9090 };
-        for port in [port, if test { 7891 } else { 7890 }] {
+        let ports = if test {
+            vec![port, 7891]
+        } else {
+            vec![port, 7890, opera::PORT, opera::UNDERLAY_PORT]
+        };
+        for port in ports {
             let _probe = TcpListener::bind(("127.0.0.1", port)).with_context(|| {
                 format!("Порт {port} занят. Отключите другой прокси перед запуском")
             })?;
@@ -473,12 +492,15 @@ impl Engine {
         self.log(&format!("WARP доступен, задержка {delay} мс."));
         if test {
             self.log("Стратегия работает. Сетевые маршруты не менялись.");
+        } else {
+            self.state(true, "Подключаю Opera EU для нейросетей…");
+            self.start_opera()?;
         }
         settings.save(&self.root)?;
         Ok(delay)
     }
 
-    fn auto_select(&mut self, mut settings: Settings) -> Result<()> {
+    fn auto_select(&mut self, mut settings: Settings, best: bool) -> Result<()> {
         if !platform::is_admin() {
             bail!("Подбор требует прав администратора");
         }
@@ -490,6 +512,7 @@ impl Engine {
             std::iter::once(preferred).chain((0..catalog.len()).filter(|i| *i != preferred));
         let mut results = Vec::new();
         let mut failed = 0usize;
+        let mut candidates = Vec::new();
         settings.custom = false;
         for (attempt, index) in order.enumerate() {
             self.cancelled()?;
@@ -513,6 +536,11 @@ impl Engine {
                 Ok(delay) => (Some(*delay), None),
                 Err(error) => (None, Some(format!("{error:#}"))),
             };
+            self.cancelled()?;
+            crate::features::record(&self.root, index, delay)?;
+            if let Some(ms) = delay {
+                candidates.push((index, ms));
+            }
             results.push(serde_json::json!({"name": catalog[index].name, "index": index, "delay_ms": delay, "error": error}));
             fs::write(
                 self.root.join("data/strategy-results.json"),
@@ -524,7 +552,7 @@ impl Engine {
             let _ = self
                 .events
                 .send(Event::Batch(Some((attempt + 1, catalog.len(), failed))));
-            if result.is_ok() {
+            if result.is_ok() && !best {
                 settings.save(&self.root)?;
                 let _ = self.events.send(Event::Selected(index));
                 self.log(&format!(
@@ -534,9 +562,26 @@ impl Engine {
                 self.state(false, "Профиль WARP подобран");
                 return Ok(());
             }
-            self.log(&format!("Не прошёл: {}", catalog[index].name));
+            self.log(&format!(
+                "{}: {}",
+                if result.is_ok() {
+                    "Прошёл"
+                } else {
+                    "Не прошёл"
+                },
+                catalog[index].name
+            ));
             self.cancelled()?;
             self.pause(Duration::from_secs(3))?;
+        }
+        if best {
+            if let Some(index) = crate::features::best(&self.root, &candidates) {
+                settings.strategy = index;
+                settings.save(&self.root)?;
+                let _ = self.events.send(Event::Selected(index));
+                self.state(false, "Лучший профиль сохранён");
+                return Ok(());
+            }
         }
         original.save(&self.root)?;
         bail!("Ни один профиль не прошёл проверку. См. data/strategy-results.json")
@@ -592,6 +637,7 @@ impl Engine {
                     self.root.join("data/mihomo/warp.yaml").is_file(),
                 ),
                 ("Тоннель выключен", false),
+                ("Opera EU выключена", false),
             ]
             .iter()
             .enumerate()
@@ -622,19 +668,39 @@ impl Engine {
         Ok(())
     }
     fn stop(&mut self) {
+        self.opera.take();
         while let Some(mut child) = self.children.pop() {
             child.stop();
         }
         self.job.take();
         self.running = false;
         self.item(2, "Тоннель выключен", false);
+        self.item(3, "Opera EU выключена", false);
     }
 
     fn refresh_health(&mut self) {
         match self.delay(9090, Duration::from_secs(6)) {
             Ok(delay) => {
                 self.item(2, &format!("WARP отвечает · {delay} мс"), true);
-                self.state(false, "Подключено");
+                let result = if self
+                    .opera
+                    .as_ref()
+                    .is_some_and(|process| matches!(process.exit_code(), Ok(None)))
+                {
+                    self.opera_country(Duration::from_secs(6))
+                        .map(|country| self.item(3, &format!("Opera EU · {country}"), true))
+                } else {
+                    self.start_opera()
+                };
+                match result {
+                    Ok(()) => self.state(false, "Подключено"),
+                    Err(error) if !self.cancel.load(Ordering::Relaxed) => {
+                        self.item(3, "Opera EU недоступна", false);
+                        self.log(&format!("Opera: {error:#}"));
+                        self.state(false, "Нейросети: нет связи с Opera");
+                    }
+                    Err(_) => {}
+                }
             }
             Err(error) if !self.cancel.load(Ordering::Relaxed) => {
                 self.item(2, "WARP не отвечает", false);
@@ -644,9 +710,64 @@ impl Engine {
             Err(_) => {}
         }
     }
+
+    fn start_opera(&mut self) -> Result<()> {
+        self.cancelled()?;
+        self.opera.take();
+        self.item(3, "Подключаю Opera EU через WARP…", false);
+        self.log("Запускаю Opera EU; API и HTTPS-туннель Opera идут через WARP.");
+        let process = self.launch(
+            "app/bin/opera/opera-proxy.exe",
+            &opera::launch_args(),
+            "opera-proxy.log",
+        )?;
+        self.opera = Some(process);
+        match self.opera_country(Duration::from_secs(60)) {
+            Ok(country) => {
+                self.item(3, &format!("Opera EU · {country}"), true);
+                self.log(&format!("Opera EU доступна, страна выхода: {country}. AI HTTPS направляется через Opera."));
+                Ok(())
+            }
+            Err(error) => {
+                self.item(3, "Opera EU недоступна", false);
+                Err(error)
+            }
+        }
+    }
+
+    fn opera_country(&self, timeout: Duration) -> Result<String> {
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .proxy(reqwest::Proxy::all(format!(
+                "http://127.0.0.1:{}",
+                opera::PORT
+            ))?)
+            .timeout(Duration::from_secs(6))
+            .build()?;
+        let deadline = Instant::now() + timeout;
+        let mut last_error = "Прокси ещё не готов".to_owned();
+        while Instant::now() < deadline {
+            self.cancelled()?;
+            let process = self.opera.as_ref().context("Opera не запущена")?;
+            if let Some(code) = process.exit_code()? {
+                bail!("Opera завершилась с кодом {code}. См. opera-proxy.log");
+            }
+            match client
+                .get("https://www.cloudflare.com/cdn-cgi/trace")
+                .send()
+                .and_then(|r| r.error_for_status())
+                .and_then(|r| r.text())
+            {
+                Ok(trace) => return opera::country_from_trace(&trace),
+                Err(error) => last_error = error.to_string(),
+            }
+            self.pause(Duration::from_millis(500))?;
+        }
+        bail!("Opera EU не ответила: {last_error}")
+    }
 }
 
-pub fn required_files() -> [&'static str; 7] {
+pub fn required_files() -> [&'static str; 8] {
     [
         "app/bin/mihomo/mihomo.exe",
         "app/bin/wgcf/wgcf.exe",
@@ -655,6 +776,7 @@ pub fn required_files() -> [&'static str; 7] {
         "app/bin/zapret/WinDivert64.sys",
         "app/bin/zapret/cygwin1.dll",
         "app/bin/zapret/tls_clienthello_www_google_com.bin",
+        "app/bin/opera/opera-proxy.exe",
     ]
 }
 

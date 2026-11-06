@@ -86,7 +86,7 @@ pub struct App {
     stopping: bool,
     running: bool,
     status: String,
-    checks: [(String, bool); 3],
+    checks: [(String, bool); 4],
     journal: VecDeque<String>,
     engine_log: String,
     /// Результаты последнего подбора: индекс профиля -> задержка (None — не прошёл).
@@ -99,6 +99,7 @@ pub struct App {
     renat_off: Option<egui::TextureHandle>,
     renat_loaded: bool,
     allow_close: bool,
+    tools: crate::features::Tools,
 }
 
 impl App {
@@ -201,6 +202,7 @@ impl App {
                 ("Ожидание проверки".into(), false),
                 ("Ожидание проверки".into(), false),
                 ("Тоннель выключен".into(), false),
+                ("Opera EU выключена".into(), false),
             ],
             journal: VecDeque::new(),
             engine_log: String::new(),
@@ -213,6 +215,7 @@ impl App {
             renat_off: None,
             renat_loaded: false,
             allow_close: false,
+            tools: Default::default(),
         }
     }
 
@@ -249,6 +252,10 @@ impl App {
     }
 
     fn connection_button(&mut self, ui: &mut egui::Ui) {
+        if self.tools.locked() {
+            ui.label("Завершите операцию с настройками…");
+            return;
+        }
         let active = self.running || self.busy;
         let label = if self.stopping {
             "Отключаю…"
@@ -365,7 +372,7 @@ impl App {
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.add_space(4.0);
-                    ui.add_enabled_ui(!self.busy && !self.running, |ui| {
+                    ui.add_enabled_ui(!self.busy && !self.running && !self.tools.locked(), |ui| {
                         egui::ComboBox::from_id_salt("strategy")
                             .width(ui.available_width() - 12.0)
                             .height(220.0)
@@ -419,6 +426,12 @@ impl App {
                                     "Проверяю профиль…",
                                 );
                             }
+                            if ui.button("Выбрать лучший").clicked() {
+                                self.action(
+                                    Command::Best(self.settings.clone()),
+                                    "Сравниваю все профили…",
+                                );
+                            }
                             if ui.button("Подобрать автоматически").clicked()
                             {
                                 self.action(
@@ -427,6 +440,16 @@ impl App {
                                 );
                             }
                         });
+                        if let Some(stat) =
+                            crate::features::stats(&self.root).get(&self.settings.strategy)
+                        {
+                            ui.label(format!(
+                                "Успешно {}/{} · средняя задержка {} мс",
+                                stat.successes,
+                                stat.attempts,
+                                stat.total_ms / stat.successes.max(1)
+                            ));
+                        }
                         ui.label(
                             RichText::new("Проверка без TUN. Перед тестом отключите другой VPN.")
                                 .size(14.0)
@@ -455,8 +478,9 @@ impl App {
                     .num_columns(2)
                     .spacing([20.0, 8.0])
                     .show(ui, |ui| {
-                        for (index, title) in
-                            ["Компоненты", "Профиль", "Тоннель"].iter().enumerate()
+                        for (index, title) in ["Компоненты", "Профиль", "Тоннель", "Нейросети"]
+                            .iter()
+                            .enumerate()
                         {
                             ui.label(RichText::new(*title).color(MUTED));
                             ui.label(
@@ -492,43 +516,52 @@ impl App {
             .default_open(false)
             .show(ui, |ui| {
                 ui.add_space(4.0);
-                let mut changed = false;
-                let mut autostart = self.settings.autostart;
-                if switch_row(
-                    ui,
-                    "Запускать вместе с Windows",
-                    "Тихо, в трее, с автоподключением",
-                    &mut autostart,
-                ) {
-                    match platform::set_autostart(autostart, &self.root) {
-                        Ok(()) => {
-                            self.settings.autostart = autostart;
-                            changed = true;
-                        }
-                        Err(error) => {
-                            self.journal(format!("Автозапуск не изменён: {error:#}"));
+                ui.add_enabled_ui(!self.tools.locked(), |ui| {
+                    let mut changed = false;
+                    let mut autostart = self.settings.autostart;
+                    if switch_row(
+                        ui,
+                        "Запускать вместе с Windows",
+                        "Тихо, в трее, с автоподключением",
+                        &mut autostart,
+                    ) {
+                        match platform::set_autostart(autostart, &self.root) {
+                            Ok(()) => {
+                                self.settings.autostart = autostart;
+                                changed = true;
+                            }
+                            Err(error) => {
+                                self.journal(format!("Автозапуск не изменён: {error:#}"));
+                            }
                         }
                     }
-                }
-                if switch_row(
+                    if switch_row(
+                        ui,
+                        "Крестик сворачивает в трей",
+                        "Выключено — крестик закрывает приложение",
+                        &mut self.settings.close_to_tray,
+                    ) {
+                        changed = true;
+                    }
+                    let hint = if self.renat_on.is_some() || self.renat_off.is_some() {
+                        "Радужная кнопка, фон зависит от подключения"
+                    } else {
+                        "Свои картинки: data/renat-on.png и renat-off.png"
+                    };
+                    if switch_row(ui, "Ренат мод", hint, &mut self.settings.renat) {
+                        changed = true;
+                    }
+                    if changed {
+                        let _ = self.settings.save(&self.root);
+                    }
+                });
+                self.tools.show(
                     ui,
-                    "Крестик сворачивает в трей",
-                    "Выключено — крестик закрывает приложение",
-                    &mut self.settings.close_to_tray,
-                ) {
-                    changed = true;
-                }
-                let hint = if self.renat_on.is_some() || self.renat_off.is_some() {
-                    "Радужная кнопка, фон зависит от подключения"
-                } else {
-                    "Свои картинки: data/renat-on.png и renat-off.png"
-                };
-                if switch_row(ui, "Ренат мод", hint, &mut self.settings.renat) {
-                    changed = true;
-                }
-                if changed {
-                    let _ = self.settings.save(&self.root);
-                }
+                    &self.root,
+                    &self.settings,
+                    self.busy || self.running,
+                    self.running,
+                );
             });
     }
 
@@ -589,6 +622,9 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(settings) = self.tools.poll(&self.root) {
+            self.settings = settings;
+        }
         while let Ok(event) = self.worker.rx.try_recv() {
             match event {
                 Event::Log(text) => self.journal(text),
@@ -721,6 +757,8 @@ impl eframe::App for App {
                                     &self.status
                                 } else if self.running && self.healthy() {
                                     "Обход работает"
+                                } else if self.running && self.checks[2].1 {
+                                    "Нейросети: нет связи с Opera"
                                 } else if self.running {
                                     "Нет связи с WARP"
                                 } else {
@@ -729,7 +767,13 @@ impl eframe::App for App {
                                 ui.label(RichText::new(title).size(22.0).strong());
                                 if self.running && !self.busy {
                                     ui.label(
-                                        RichText::new(&self.checks[2].0).size(14.0).color(MUTED),
+                                        RichText::new(if self.checks[2].1 {
+                                            &self.checks[3].0
+                                        } else {
+                                            &self.checks[2].0
+                                        })
+                                        .size(13.0)
+                                        .color(MUTED),
                                     );
                                 }
                             });

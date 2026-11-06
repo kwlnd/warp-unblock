@@ -1,0 +1,49 @@
+# Google AI, Gemini, AI Studio, NotebookLM and related AI endpoints
++.daily-cloudcode-pa.googleapis.com
++.cloudcode-pa.googleapis.com
++.generativelanguage.googleapis.com
++.proactivebackend-pa.googleapis.com
++.robinfrontend-pa.googleapis.com
++.aisandbox-pa.googleapis.com
++.alkalimakersuite-pa.clients6.google.com
++.aistudio.google.com
++.gemini.google.com
++.notebooklm.google.com
++.notebook.google.com
++.jules.google.com
++.flow.google.com
++.ai.google.dev
++.labs.google
++.artificialanalysis.ai
+
+# OpenAI, ChatGPT, Codex and supporting assets
++.openai.com
++.chatgpt.com
++.oaistatic.com
++.oaiusercontent.com
+
+# Anthropic, Claude and supporting assets
++.anthropic.com
++.claude.ai
++.claude.com
++.claude.site
++.claudeusercontent.com
++.claudemcpcontent.com
+
+# OpenCode
++.opencode.ai
+
+# Other AI services and developer clients
++.perplexity.ai
++.huggingface.co
++.hf.co
++.grok.com
++.x.ai
++.cursor.sh
++.cursor.com
++.cursor.so
++.cursorapi.com
++.cursor-cdn.com
++.cursor-marketplace.com
++.cline.bot
++.manus.im

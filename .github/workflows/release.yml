@@ -38,6 +38,8 @@ jobs:
 
       - name: Тесты и сборка
         working-directory: source
+        env:
+          WARP_VERSION: ${{ steps.ver.outputs.tag }}
         run: |
           cargo test --locked
           cargo build --release --locked
@@ -51,6 +53,7 @@ jobs:
           Copy-Item source/target/release/warp-unblock.exe "$dir/WarpUnblock.exe"
           Copy-Item app "$dir/app" -Recurse
           Copy-Item docs/README.md "$dir/README.md"
+          Copy-Item docs/DOMAIN-LISTS.md "$dir/DOMAIN-LISTS.md"
           Copy-Item LICENSE, THIRD_PARTY.md $dir
           Compress-Archive -Path $dir -DestinationPath "dist/$name.zip" -CompressionLevel Optimal
           (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Set-Content "dist/$name.zip.sha256"

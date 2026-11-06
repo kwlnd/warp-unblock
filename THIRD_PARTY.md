@@ -5,6 +5,7 @@
 | Компонент | Файл | Лицензия | Источник |
 | --- | --- | --- | --- |
 | mihomo (Meta, prerelease Alpha) | `app/bin/mihomo/mihomo.exe` | GPL-3.0 | https://github.com/MetaCubeX/mihomo |
+| opera-proxy v1.31.0 | `app/bin/opera/opera-proxy.exe` | MIT (`app/bin/opera/LICENSE.txt`) | https://github.com/Alexey71/opera-proxy |
 | wgcf | `app/bin/wgcf/wgcf.exe` | MIT | https://github.com/ViRb3/wgcf |
 | zapret / winws (v72.13, `87e0586`), собран из исходников — см. `app/bin/zapret/winws-build.json` | `app/bin/zapret/winws.exe` | MIT (`app/bin/zapret/LICENSE-zapret.txt`) | https://github.com/bol-van/zapret |
 | WinDivert | `app/bin/zapret/WinDivert.dll`, `WinDivert64.sys` | LGPL-3.0 или GPL-2.0 | https://reqrypt.org/windivert.html |
@@ -26,3 +27,5 @@ ed9d5379061e5de79c3375cc62246c2142ea1c97d94f4d16bfbea6fb1b7fc889  app/bin/zapret
 Правила маршрутизации берутся из [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat), [Davoyan/mihomo-rule-sets](https://github.com/Davoyan/mihomo-rule-sets) и [kwlnd/mihomo-routing](https://github.com/kwlnd/mihomo-routing) и скачиваются при работе приложения.
 
 Библиотеки Rust подтягиваются через `source/Cargo.lock`; GUI построен на [egui/eframe](https://github.com/emilk/egui) (MIT/Apache-2.0).
+
+Диалоги файлов: rfd (MIT); генерация QR: qrcode-rust (MIT/Apache-2.0); Base64: base64 (MIT/Apache-2.0). Версии закреплены в Cargo.lock.

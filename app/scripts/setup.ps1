@@ -52,4 +52,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $wgcf 'wgcf.exe'))) {
     New-Item -ItemType Directory -Path $wgcf -Force | Out-Null
     Download 'https://github.com/ViRb3/wgcf/releases/download/v2.3.1/wgcf_2.3.1_windows_amd64.exe' (Join-Path $wgcf 'wgcf.exe')
 }
+
+$opera = Join-Path $Root 'app/bin/opera'
+if (-not (Test-Path -LiteralPath (Join-Path $opera 'opera-proxy.exe'))) {
+    New-Item -ItemType Directory -Path $opera -Force | Out-Null
+    Download 'https://github.com/Alexey71/opera-proxy/releases/download/v1.31.0/opera-proxy.windows-amd64.exe' (Join-Path $opera 'opera-proxy.exe')
+}
 Write-Output 'Dependencies ready'

@@ -4,6 +4,13 @@
 # ============================================================================
 
 mixed-port: 7890
+# Opera API and its upstream TLS are always carried inside WARP.
+listeners:
+  - name: opera-underlay
+    type: http
+    listen: 127.0.0.1
+    port: 17892
+    proxy: WARP
 # true — пускать в прокси устройства из LAN (тогда обязательно смените пароль в authentication)
 allow-lan: false
 bind-address: "*"
@@ -70,6 +77,12 @@ dns:
     - https://8.8.8.8/dns-query#DIRECT
     - https://94.140.14.14/dns-query#DIRECT
   nameserver-policy:
+    rule-set:локальные-нейросети,нейросети:
+      - https://8.8.8.8/dns-query#WARP
+      - https://1.1.1.1/dns-query#WARP
+    "+.sec-tunnel.com":
+      - https://8.8.8.8/dns-query#WARP
+      - https://1.1.1.1/dns-query#WARP
     # Приватные домены → системный DNS
     rule-set:локальные-домены:
       - system
@@ -81,7 +94,7 @@ dns:
       - https://8.8.8.8/dns-query#WARP
       - https://94.140.14.14/dns-query#WARP
     # Заблокированные домены → DNS через WARP
-    rule-set:заблокированные-itdog,заблокированные-refilter,мои-в-обход,локальные-в-обход,порно,нейросети,speedtest,spotify,whatsapp,signal,viber:
+    rule-set:заблокированные-itdog,заблокированные-refilter,мои-в-обход,локальные-в-обход,порно,speedtest,spotify,whatsapp,signal,viber:
       - https://1.1.1.1/dns-query#WARP
       - https://8.8.8.8/dns-query#WARP
     # Discord
@@ -120,6 +133,10 @@ proxy-providers:
 proxies:
   - name: DNS-OUT
     type: dns
+  - name: Opera
+    type: http
+    server: 127.0.0.1
+    port: 1371
 
 # ============================================================================
 #  ГРУППЫ ПРОКСИ
@@ -353,6 +370,12 @@ rule-providers:
     format: text
     path: ../../app/config/lists/proxy-domains.txt
 
+  локальные-нейросети:
+    type: file
+    behavior: domain
+    format: text
+    path: ../../app/config/lists/ai-domains.txt
+
   локальные-напрямую:
     type: file
     behavior: domain
@@ -395,6 +418,9 @@ rules:
   - RULE-SET,локальные-адреса,DIRECT,no-resolve
   - RULE-SET,локальные-домены,DIRECT
 
+  # Guard for Opera itself. Its connection to the forced-WARP listener is local.
+  - PROCESS-NAME,opera-proxy.exe,DIRECT
+
   # Сторонние VPN-клиенты не заворачиваем в WARP
   - PROCESS-NAME-REGEX,(?i).*wireguard.*,DIRECT
 
@@ -409,6 +435,17 @@ rules:
   - RULE-SET,quic,REJECT
 
   # ---- ОБХОД БЛОКИРОВОК ----
+
+  # User DIRECT overrides other domain routing.
+  - RULE-SET,локальные-напрямую,DIRECT
+
+  # AI HTTPS goes through Opera EU before broad Google/local WARP rules.
+  # Opera is HTTP CONNECT only; other AI transports retain WARP.
+  - AND,((NETWORK,tcp),(RULE-SET,локальные-нейросети)),Opera
+  - AND,((NETWORK,tcp),(RULE-SET,нейросети)),Opera
+  - AND,((NETWORK,tcp),(PROCESS-NAME-REGEX,(?i)^(claude|chatgpt|codex|opencode|jan-desktop)\.exe$)),Opera
+  - RULE-SET,локальные-нейросети,WARP
+  - RULE-SET,нейросети,WARP
 
   # Свой список доменов в обход
   - RULE-SET,локальные-в-обход,WARP
@@ -446,13 +483,11 @@ rules:
   - RULE-SET,заблокированные-itdog,WARP
   - RULE-SET,заблокированные-refilter,WARP
   - RULE-SET,порно,WARP
-  - RULE-SET,нейросети,WARP
   - RULE-SET,speedtest,WARP
 
   # ---- DIRECT ----
 
   # Свой список доменов напрямую
-  - RULE-SET,локальные-напрямую,DIRECT
   - RULE-SET,мои-напрямую,DIRECT
   - RULE-SET,российские-домены,DIRECT
   - RULE-SET,российские-адреса,DIRECT
