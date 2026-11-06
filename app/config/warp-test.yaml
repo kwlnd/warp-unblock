@@ -12,7 +12,7 @@ proxy-providers:
 
 proxy-groups:
   - name: WARP
-    type: select
+    type: fallback
     use:
       - warp
 

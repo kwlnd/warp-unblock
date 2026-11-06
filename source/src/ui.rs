@@ -11,11 +11,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-const BACKGROUND: Color32 = Color32::from_rgb(23, 27, 33);
-const SURFACE: Color32 = Color32::from_rgb(31, 38, 45);
-const ACCENT: Color32 = Color32::from_rgb(145, 208, 180);
-const MUTED: Color32 = Color32::from_rgb(174, 182, 195);
-const ERROR: Color32 = Color32::from_rgb(236, 132, 140);
+// Нейтральный тёмный фон и оранжевый акцент Cloudflare WARP.
+const BACKGROUND: Color32 = Color32::from_rgb(22, 23, 26);
+const SURFACE: Color32 = Color32::from_rgb(33, 35, 40);
+const SURFACE_HOVER: Color32 = Color32::from_rgb(48, 51, 58);
+const BORDER: Color32 = Color32::from_rgb(58, 62, 71);
+const TEXT: Color32 = Color32::from_rgb(240, 242, 245);
+const MUTED: Color32 = Color32::from_rgb(177, 183, 194);
+const ACCENT: Color32 = Color32::from_rgb(246, 130, 31);
+const ACCENT_HOVER: Color32 = Color32::from_rgb(255, 152, 64);
+const ON_ACCENT: Color32 = Color32::from_rgb(28, 16, 4);
+const OK: Color32 = Color32::from_rgb(76, 195, 138);
+const WARN: Color32 = Color32::from_rgb(240, 180, 41);
+const ERROR: Color32 = Color32::from_rgb(242, 102, 109);
 
 pub struct App {
     root: PathBuf,
@@ -23,6 +31,8 @@ pub struct App {
     settings: Settings,
     catalog: Vec<strategies::Strategy>,
     busy: bool,
+    stage: Option<(usize, usize, String)>,
+    batch: Option<(usize, usize, usize)>,
     stopping: bool,
     running: bool,
     status: String,
@@ -40,24 +50,46 @@ impl App {
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = BACKGROUND;
         visuals.window_fill = SURFACE;
-        visuals.override_text_color = Some(Color32::from_rgb(235, 239, 244));
-        visuals.selection.bg_fill = Color32::from_rgb(50, 93, 79);
-        visuals.collapsing_header_frame = true;
+        visuals.window_stroke = egui::Stroke::new(1.0, BORDER);
+        visuals.override_text_color = Some(TEXT);
+        visuals.selection.bg_fill = Color32::from_rgb(120, 66, 20);
+        visuals.selection.stroke = egui::Stroke::new(1.0, ACCENT);
+        visuals.extreme_bg_color = Color32::from_rgb(17, 18, 20);
+        visuals.collapsing_header_frame = false;
+        let radius = egui::CornerRadius::same(8);
+        let widgets = &mut visuals.widgets;
+        widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, BORDER);
+        for (state, fill) in [
+            (&mut widgets.inactive, SURFACE_HOVER),
+            (&mut widgets.hovered, Color32::from_rgb(62, 66, 75)),
+            (&mut widgets.active, Color32::from_rgb(72, 77, 87)),
+        ] {
+            state.bg_fill = fill;
+            state.weak_bg_fill = fill;
+            state.bg_stroke = egui::Stroke::new(1.0, BORDER);
+            state.corner_radius = radius;
+        }
+        widgets.hovered.bg_stroke = egui::Stroke::new(1.0, ACCENT);
+        widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT);
+        widgets.open.corner_radius = radius;
         cc.egui_ctx.set_visuals(visuals);
         let mut style = (*cc.egui_ctx.style()).clone();
         style.interaction.selectable_labels = false;
         style.interaction.multi_widget_text_select = false;
         style.spacing.item_spacing = egui::vec2(10.0, 10.0);
-        style.spacing.button_padding = egui::vec2(14.0, 10.0);
+        style.spacing.button_padding = egui::vec2(14.0, 9.0);
         style
             .text_styles
-            .insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
+            .insert(egui::TextStyle::Body, egui::FontId::proportional(16.0));
         style
             .text_styles
-            .insert(egui::TextStyle::Button, egui::FontId::proportional(15.0));
+            .insert(egui::TextStyle::Button, egui::FontId::proportional(16.0));
         style
             .text_styles
-            .insert(egui::TextStyle::Small, egui::FontId::proportional(13.0));
+            .insert(egui::TextStyle::Small, egui::FontId::proportional(14.0));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Monospace, egui::FontId::monospace(13.0));
         cc.egui_ctx.set_style(style);
         let windows = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
         if let Ok(font) = fs::read(PathBuf::from(windows).join("Fonts/segoeui.ttf")) {
@@ -86,6 +118,8 @@ impl App {
             settings,
             catalog,
             busy: true,
+            stage: None,
+            batch: None,
             stopping: false,
             running: false,
             status: "Проверяю файлы…".into(),
@@ -106,6 +140,8 @@ impl App {
     fn action(&mut self, command: Command, status: &str) {
         self.stopping = matches!(command, Command::Stop);
         self.busy = true;
+        self.stage = None;
+        self.batch = None;
         self.status = status.into();
         self.worker.send(command);
     }
@@ -123,9 +159,9 @@ impl App {
 
     fn color(&self) -> Color32 {
         if self.busy {
-            Color32::from_rgb(226, 191, 120)
+            WARN
         } else if self.healthy() {
-            ACCENT
+            OK
         } else if self.running {
             ERROR
         } else {
@@ -144,21 +180,22 @@ impl App {
         } else {
             "Подключить"
         };
-        let fill = if active { SURFACE } else { ACCENT };
-        let text_color = if active {
-            Color32::WHITE
-        } else {
-            Color32::from_rgb(16, 33, 26)
-        };
+        let fill = if active { SURFACE_HOVER } else { ACCENT };
+        let text_color = if active { TEXT } else { ON_ACCENT };
         if ui
             .add_enabled(
                 !self.stopping,
                 egui::Button::new((
                     egui::Atom::grow(),
-                    RichText::new(label).size(18.0).strong().color(text_color),
+                    RichText::new(label).size(19.0).strong().color(text_color),
                     egui::Atom::grow(),
                 ))
                 .fill(fill)
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    if active { BORDER } else { ACCENT_HOVER },
+                ))
+                .corner_radius(10.0)
                 .min_size(egui::vec2(ui.available_width(), 56.0)),
             )
             .clicked()
@@ -171,6 +208,52 @@ impl App {
         }
     }
 
+    fn progress(&self, ui: &mut egui::Ui) {
+        let bar = |ui: &mut egui::Ui, fraction: f32, height: f32| {
+            ui.add(
+                egui::ProgressBar::new(fraction.clamp(0.0, 1.0))
+                    .fill(ACCENT)
+                    .desired_height(height)
+                    .corner_radius(height / 2.0),
+            );
+        };
+        if let Some((done, total, failed)) = self.batch {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Подбор профиля").size(14.0).color(MUTED));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(format!("проверено {done} из {total}"))
+                            .size(14.0)
+                            .color(TEXT),
+                    );
+                    if failed > 0 {
+                        ui.label(
+                            RichText::new(format!("не прошло {failed}  "))
+                                .size(14.0)
+                                .color(ERROR),
+                        );
+                    }
+                });
+            });
+            bar(ui, done as f32 / total.max(1) as f32, 10.0);
+        }
+        if let Some((done, total, text)) = &self.stage {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(text).size(14.0).color(MUTED));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(format!("этап {} из {total}", (done + 1).min(*total)))
+                            .size(14.0)
+                            .color(MUTED),
+                    );
+                });
+            });
+            bar(ui, *done as f32 / (*total).max(1) as f32, 6.0);
+        }
+    }
+
     fn profiles(&mut self, ui: &mut egui::Ui) {
         let current = if self.settings.custom {
             "Свои аргументы".to_owned()
@@ -179,77 +262,85 @@ impl App {
                 .name
                 .replace("WARP · ", "")
         };
-        let response = egui::CollapsingHeader::new("Профиль WARP")
-            .id_salt("profile")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.add_space(4.0);
-                ui.add_enabled_ui(!self.busy && !self.running, |ui| {
-                    egui::ComboBox::from_id_salt("strategy")
-                        .width(ui.available_width() - 12.0)
-                        .height(220.0)
-                        .selected_text(if self.settings.custom {
-                            "Свои аргументы winws"
-                        } else {
-                            &self.catalog[self.settings.strategy].name
-                        })
-                        .show_ui(ui, |ui| {
-                            for (index, profile) in self.catalog.iter().enumerate() {
-                                if ui
-                                    .selectable_label(
-                                        !self.settings.custom && self.settings.strategy == index,
-                                        &profile.name,
-                                    )
-                                    .clicked()
-                                {
-                                    self.settings.strategy = index;
-                                    self.settings.custom = false;
+        let right = ui.max_rect().right();
+        let response =
+            egui::CollapsingHeader::new(RichText::new("Профиль WARP").size(16.0).strong())
+                .id_salt("profile")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add_space(4.0);
+                    ui.add_enabled_ui(!self.busy && !self.running, |ui| {
+                        egui::ComboBox::from_id_salt("strategy")
+                            .width(ui.available_width() - 12.0)
+                            .height(220.0)
+                            .selected_text(if self.settings.custom {
+                                "Свои аргументы winws"
+                            } else {
+                                &self.catalog[self.settings.strategy].name
+                            })
+                            .show_ui(ui, |ui| {
+                                for (index, profile) in self.catalog.iter().enumerate() {
+                                    if ui
+                                        .selectable_label(
+                                            !self.settings.custom
+                                                && self.settings.strategy == index,
+                                            &profile.name,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.settings.strategy = index;
+                                        self.settings.custom = false;
+                                    }
                                 }
+                                ui.selectable_value(
+                                    &mut self.settings.custom,
+                                    true,
+                                    "Свои аргументы winws",
+                                );
+                            });
+                        if self.settings.custom {
+                            ui.label("Аргументы winws");
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.settings.custom_args)
+                                    .desired_rows(2)
+                                    .desired_width(f32::INFINITY),
+                            );
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button("Тест профиля").clicked() {
+                                self.action(
+                                    Command::Test(self.settings.clone()),
+                                    "Проверяю профиль…",
+                                );
                             }
-                            ui.selectable_value(
-                                &mut self.settings.custom,
-                                true,
-                                "Свои аргументы winws",
-                            );
+                            if ui.button("Подобрать автоматически").clicked()
+                            {
+                                self.action(
+                                    Command::Auto(self.settings.clone()),
+                                    "Подбираю профиль WARP…",
+                                );
+                            }
                         });
-                    if self.settings.custom {
-                        ui.label("Аргументы winws");
-                        ui.add(
-                            egui::TextEdit::multiline(&mut self.settings.custom_args)
-                                .desired_rows(2)
-                                .desired_width(f32::INFINITY),
+                        ui.label(
+                            RichText::new("Проверка без TUN. Перед тестом отключите другой VPN.")
+                                .size(14.0)
+                                .color(MUTED),
                         );
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.button("Тест профиля").clicked() {
-                            self.action(Command::Test(self.settings.clone()), "Проверяю профиль…");
-                        }
-                        if ui.button("Подобрать автоматически").clicked() {
-                            self.action(
-                                Command::Auto(self.settings.clone()),
-                                "Подбираю профиль WARP…",
-                            );
-                        }
                     });
-                    ui.label(
-                        RichText::new("Проверка без TUN. Перед тестом отключите другой VPN.")
-                            .small()
-                            .color(MUTED),
-                    );
                 });
-            });
         ui.painter().text(
-            response.header_response.rect.right_center() - egui::vec2(14.0, 0.0),
+            egui::pos2(right, response.header_response.rect.center().y),
             egui::Align2::RIGHT_CENTER,
             current,
-            egui::FontId::proportional(13.0),
+            egui::FontId::proportional(14.0),
             MUTED,
         );
     }
 
     fn details(&mut self, ui: &mut egui::Ui) {
         let color = self.color();
-        let response = egui::CollapsingHeader::new("Статус")
+        let right = ui.max_rect().right();
+        let response = egui::CollapsingHeader::new(RichText::new("Статус").size(16.0).strong())
             .id_salt("status")
             .default_open(false)
             .show(ui, |ui| {
@@ -264,7 +355,7 @@ impl App {
                             ui.label(RichText::new(*title).color(MUTED));
                             ui.label(
                                 RichText::new(&self.checks[index].0)
-                                    .color(if self.checks[index].1 { ACCENT } else { MUTED }),
+                                    .color(if self.checks[index].1 { OK } else { MUTED }),
                             );
                             ui.end_row();
                         }
@@ -276,21 +367,21 @@ impl App {
                                 "Проверено {} с назад · обновляется автоматически",
                                 last.elapsed().as_secs()
                             ))
-                            .small()
+                            .size(14.0)
                             .color(MUTED),
                         );
                     }
                 }
             });
         ui.painter().circle_filled(
-            response.header_response.rect.right_center() - egui::vec2(18.0, 0.0),
-            4.5,
+            egui::pos2(right - 6.0, response.header_response.rect.center().y),
+            5.0,
             color,
         );
     }
 
     fn logs(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Журнал")
+        egui::CollapsingHeader::new(RichText::new("Журнал").size(16.0).strong())
             .id_salt("journal")
             .default_open(false)
             .show(ui, |ui| {
@@ -309,7 +400,7 @@ impl App {
                     }
                 });
                 if self.journal.is_empty() {
-                    ui.label(RichText::new("Событий пока нет").small().color(MUTED));
+                    ui.label(RichText::new("Событий пока нет").size(14.0).color(MUTED));
                 }
                 egui::ScrollArea::vertical()
                     .id_salt("events")
@@ -317,7 +408,7 @@ impl App {
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
                         for text in &self.journal {
-                            ui.label(RichText::new(text).size(13.0).color(MUTED));
+                            ui.label(RichText::new(text).size(14.0).color(MUTED));
                         }
                     });
                 if !self.engine_log.is_empty() {
@@ -330,7 +421,10 @@ impl App {
                                 .show(ui, |ui| {
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(&self.engine_log).monospace().size(12.0),
+                                            RichText::new(&self.engine_log)
+                                                .monospace()
+                                                .size(13.0)
+                                                .color(MUTED),
                                         )
                                         .wrap(),
                                     );
@@ -355,6 +449,8 @@ impl eframe::App for App {
                     self.running = running;
                     self.status = status;
                     if !busy {
+                        self.stage = None;
+                        self.batch = None;
                         self.stopping = false;
                     }
                 }
@@ -366,6 +462,8 @@ impl eframe::App for App {
                         *check = (text, ok);
                     }
                 }
+                Event::Stage(done, total, text) => self.stage = Some((done, total, text)),
+                Event::Batch(batch) => self.batch = batch,
                 Event::Selected(index) => {
                     self.settings.strategy = index;
                     self.settings.custom = false;
@@ -392,7 +490,8 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(SURFACE)
-                    .corner_radius(9.0)
+                    .stroke(egui::Stroke::new(1.0, BORDER))
+                    .corner_radius(12.0)
                     .inner_margin(16.0)
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
@@ -419,20 +518,23 @@ impl eframe::App for App {
                                 ui.label(RichText::new(title).size(22.0).strong());
                                 if self.running && !self.busy {
                                     ui.label(
-                                        RichText::new(&self.checks[2].0).size(13.0).color(MUTED),
+                                        RichText::new(&self.checks[2].0).size(14.0).color(MUTED),
                                     );
                                 }
                             });
                         });
+                        if self.busy {
+                            self.progress(ui);
+                        }
                     });
                 ui.add_space(8.0);
                 egui::ScrollArea::vertical()
                     .id_salt("sections")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        self.profiles(ui);
-                        self.details(ui);
-                        self.logs(ui);
+                        card(ui, |ui| self.profiles(ui));
+                        card(ui, |ui| self.details(ui));
+                        card(ui, |ui| self.logs(ui));
                     });
             });
         if self.close_dialog {
@@ -456,6 +558,18 @@ impl eframe::App for App {
         }
         ctx.request_repaint_after(Duration::from_millis(250));
     }
+}
+
+fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(SURFACE)
+        .stroke(egui::Stroke::new(1.0, BORDER))
+        .corner_radius(12.0)
+        .inner_margin(egui::Margin::symmetric(14, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui);
+        });
 }
 
 fn tail(path: &Path) -> String {
