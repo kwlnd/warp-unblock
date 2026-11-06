@@ -93,9 +93,25 @@ class MainActivity : ComponentActivity() {
         if (it.resultCode == RESULT_OK) startVpn()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        connectIfRequested()
+    }
+
+    /** Плитка в шторке просит подключиться, а разрешение на VPN ещё не выдано. */
+    private fun connectIfRequested() {
+        if (intent.getBooleanExtra(EXTRA_CONNECT, false)) {
+            intent.removeExtra(EXTRA_CONNECT)
+            val phase = AppState.ui.value.phase
+            if (phase != Phase.CONNECTED && phase != Phase.BUSY) toggle()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppState.init(this)
+        connectIfRequested()
         setContent {
             WarpTheme {
                 Screen(
@@ -121,6 +137,10 @@ class MainActivity : ComponentActivity() {
                 if (intent != null) vpnPermission.launch(intent) else startVpn()
             }
         }
+    }
+
+    companion object {
+        const val EXTRA_CONNECT = "dev.warpunblock.CONNECT"
     }
 
     private fun startVpn() {
