@@ -69,7 +69,7 @@ data class WarpAccount(
         }
 
         /** Регистрирует новый аккаунт. Нужен доступ к api.cloudflareclient.com (VPN при этом выключен). */
-        fun register(dir: File): WarpAccount {
+        fun register(dir: File, proxy: java.net.Proxy? = null, timeoutMs: Int = 20_000): WarpAccount {
             val private = X25519PrivateKeyParameters(SecureRandom())
             val privateB64 = Base64.encodeToString(private.encoded, Base64.NO_WRAP)
             val publicB64 = Base64.encodeToString(private.generatePublicKey().encoded, Base64.NO_WRAP)
@@ -81,12 +81,14 @@ data class WarpAccount(
                 .put("type", "Android")
                 .put("model", "PC")
                 .put("locale", "en_US")
-            val connection = URL("https://api.cloudflareclient.com/v0a1922/reg")
-                .openConnection() as HttpURLConnection
+            val endpoint = URL("https://api.cloudflareclient.com/v0a1922/reg")
+            val connection = (
+                if (proxy != null) endpoint.openConnection(proxy) else endpoint.openConnection()
+                ) as HttpURLConnection
             try {
                 connection.requestMethod = "POST"
-                connection.connectTimeout = 15_000
-                connection.readTimeout = 20_000
+                connection.connectTimeout = timeoutMs
+                connection.readTimeout = timeoutMs
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json")
                 connection.setRequestProperty("User-Agent", "okhttp/3.12.1")

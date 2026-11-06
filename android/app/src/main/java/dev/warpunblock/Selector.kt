@@ -30,8 +30,10 @@ object Selector {
             core.prepare()
             var account = WarpAccount.load(context.filesDir)
             if (account == null) {
-                AppState.set(UiState(Phase.BUSY, "Подбор профиля", "Регистрирую аккаунт WARP", selecting = true))
-                account = WarpAccount.register(context.filesDir)
+                account = Bypass.register(context) {
+                    AppState.set(UiState(Phase.BUSY, "Подбор профиля", it, selecting = true))
+                    AppState.log(it)
+                }
             }
             val strategies = Strategies.load(context)
             val preferred = AppState.strategyIndex.value.coerceIn(strategies.indices)

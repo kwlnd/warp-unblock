@@ -31,7 +31,7 @@ Windows-версия живёт в ветке `main`; здесь только An
 
 ## Если регистрация WARP не проходит
 
-Приложение регистрирует аккаунт WARP прямо с телефона. Если оператор режет `api.cloudflareclient.com`, подбор профиля и подключение упадут с «Read timed out» / «Cloudflare не отвечает». Тогда:
+Приложение регистрирует аккаунт WARP прямо с телефона: сначала напрямую, потом через локальный SOCKS-прокси [ByeDPI](https://github.com/hufrea/byedpi) (аналог zapret без root, работает только для запроса регистрации) с перебором 7 стратегий. Если и так не вышло (оператор режет `api.cloudflareclient.com`), будет ошибка «Не удалось зарегистрировать WARP». Тогда:
 
 1. На компьютере получите профиль: в папке `data/warp/` Windows-версии лежит `wgcf-profile.conf` (или выполните `wgcf register --accept-tos` и `wgcf generate` в пустой папке).
 2. Отправьте файл на телефон и на вкладке «Профили» нажмите «Импортировать профиль».
@@ -55,6 +55,7 @@ APK подписываются хобби-ключом `android/hobby-signing.jk
 | Компонент | Лицензия |
 | --- | --- |
 | [mihomo](https://github.com/MetaCubeX/mihomo) (v1.19.33, android) | GPL-3.0 |
+| [ByeDPI](https://github.com/hufrea/byedpi) (v0.8.1, только регистрация) | MIT |
 | [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) (2.9.3) | MIT |
 | [Bouncy Castle](https://www.bouncycastle.org/) (X25519) | MIT |
 | Jetpack Compose, AndroidX | Apache-2.0 |

@@ -45,9 +45,10 @@ class WarpVpnService : VpnService() {
             core.prepare()
             var account = WarpAccount.load(filesDir)
             if (account == null) {
-                AppState.set(UiState(Phase.BUSY, "Подключаю…", "Регистрирую аккаунт WARP"))
-                AppState.log("Регистрирую аккаунт WARP")
-                account = WarpAccount.register(filesDir)
+                account = Bypass.register(this) {
+                    AppState.set(UiState(Phase.BUSY, "Подключаю…", it))
+                    AppState.log(it)
+                }
             }
             val strategies = Strategies.load(this)
             val strategy = strategies[AppState.strategyIndex.value.coerceIn(strategies.indices)]
