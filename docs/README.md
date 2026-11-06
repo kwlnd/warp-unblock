@@ -16,7 +16,7 @@
 
 ## Запуск
 
-Откройте **WarpUnblock.exe** в корне и разрешите права администратора. Отключите TUN других VPN-клиентов перед подключением.
+Откройте **WarpUnblock.exe** из распакованного архива и разрешите права администратора. Отключите TUN других VPN-клиентов перед подключением.
 
 - **Подключить** — проверить компоненты и конфиг, подготовить профиль, включить TUN и проверить WARP.
 - **Остановить** — остановить только процессы этого приложения.
@@ -54,11 +54,15 @@
 
 ## Сборка
 
-Приложение: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1`. Нужны Rust 1.95 с rustfmt и MSVC Build Tools. Можно выбрать другую установленную версию через `-Toolchain`; текущий EXE собран Rust 1.93, форматирование проверено rustfmt 1.95. Зависимости зафиксированы в Cargo.lock.
+Приложение: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1`. Нужны Rust 1.95 с rustfmt и MSVC Build Tools. Можно выбрать другую установленную версию через `-Toolchain`. Зависимости зафиксированы в Cargo.lock.
 
 Только winws из исходников: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-winws.ps1 -InstallToolchain`. Это скачает Cygwin/GCC внутрь `tools/.cache/`, без записи в реестр и ярлыков. Повторная сборка: та же команда без `-InstallToolchain`.
 
 Код zapret закреплён на `v72.13`, commit `87e058624c72863db53bdaf7fb6f16576dddb6ab`. Код winws и ресурс manifest компилируются локально; готовые upstream `.o` ресурсы не используются. Библиотека импорта WinDivert остаётся из исходного дерева zapret. SHA-256 и версия GCC — в `app/bin/zapret/winws-build.json`. Вместе с winws копируется соответствующий runtime Cygwin. WinDivert.dll и подписанный драйвер WinDivert64.sys не пересобираются.
+
+## Лицензия
+
+Код приложения — MIT (`LICENSE`). Сторонние программы в `app/bin/` — со своими лицензиями, список и хеши в `THIRD_PARTY.md`.
 
 ## Источники
 
