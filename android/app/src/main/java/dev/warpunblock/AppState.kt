@@ -23,6 +23,12 @@ object AppState {
     val strategyIndex = MutableStateFlow(0)
     /** Результаты подбора: индекс профиля -> задержка в мс (0 — не прошёл). */
     val results = MutableStateFlow<Map<Int, Int>>(emptyMap())
+    /** Последняя задержка WARP в мс. */
+    val delay = MutableStateFlow<Int?>(null)
+    /** Байты (отправлено, получено) через тоннель. */
+    val traffic = MutableStateFlow(0L to 0L)
+    /** Момент подключения (мс), null — не подключено. */
+    val since = MutableStateFlow<Long?>(null)
 
     private lateinit var prefs: android.content.SharedPreferences
 

@@ -63,6 +63,9 @@ class WarpVpnService : VpnService() {
             }
             AppState.log("WARP отвечает, $delay мс")
             establishTun()
+            AppState.delay.value = delay
+            AppState.traffic.value = 0L to 0L
+            AppState.since.value = System.currentTimeMillis()
             AppState.set(UiState(Phase.CONNECTED, "Обход работает", "WARP отвечает · $delay мс"))
             updateNotification("Обход работает")
             health(core, process)
@@ -112,10 +115,15 @@ class WarpVpnService : VpnService() {
         var counter = 0
         while (!stopping && process.isAlive) {
             Thread.sleep(1000)
+            runCatching {
+                val stats = tproxy?.TProxyGetStats()
+                if (stats != null && stats.size >= 4) AppState.traffic.value = stats[1] to stats[3]
+            }
             if (++counter < 30) continue
             counter = 0
             val delay = core.waitDelay(Core.API_PORT, 12) { process.isAlive && !stopping }
             if (stopping) return
+            AppState.delay.value = delay
             AppState.set(
                 if (delay != null) {
                     UiState(Phase.CONNECTED, "Обход работает", "WARP отвечает · $delay мс")
@@ -138,6 +146,8 @@ class WarpVpnService : VpnService() {
         tun = null
         mihomo?.destroyForcibly()
         mihomo = null
+        AppState.since.value = null
+        AppState.delay.value = null
         AppState.set(result)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
