@@ -2,7 +2,7 @@
 /windows/data/
 /windows/source/target/
 /windows/tools/.cache/
-/windows/WarpUnblock.exe
+/windows/*.exe
 /data/
 /dist/
 *.log

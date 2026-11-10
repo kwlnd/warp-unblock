@@ -5,6 +5,7 @@ use crate::{
     features, platform, strategies, tray, update,
 };
 use gpui_kit::component::input::{Textarea, TextareaState};
+use gpui_kit::component::Icon;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::{
@@ -30,7 +31,49 @@ const ON_ACCENT: u32 = 0x1c1004;
 const OK: u32 = 0x4cc38a;
 const WARN: u32 = 0xf0b429;
 const ERROR: u32 = 0xf2666d;
-const FONT: &str = "Segoe UI";
+/// Segoe UI Variable — системный шрифт Windows 11; на Windows 10 его нет, там Segoe UI.
+fn font() -> &'static str {
+    static FONT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| {
+        let windows = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+        if PathBuf::from(windows).join("Fonts/SegUIVar.ttf").is_file() {
+            "Segoe UI Variable Text"
+        } else {
+            "Segoe UI"
+        }
+    })
+}
+
+// Иконки Lucide, которых нет в базовом наборе gpui-kit.
+gpui_kit::assets::icon_assets!(
+    ExtraIcons,
+    [Power, Route, ListFilter, ScrollText, ShieldCheck, Download]
+);
+
+struct AppAssets;
+impl AssetSource for AppAssets {
+    fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        if let Some(bytes) = ExtraIcons.load(path)? {
+            return Ok(Some(bytes));
+        }
+        gpui_kit::assets::Assets.load(path)
+    }
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        let mut paths = gpui_kit::assets::Assets.list(path)?;
+        paths.extend(ExtraIcons.list(path)?);
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+}
+
+/// Иконка Lucide из набора gpui-kit.
+fn icon(name: &str, size: f32, color: Hsla) -> Icon {
+    Icon::default()
+        .path(SharedString::from(format!("icons/{name}.svg")))
+        .size(px(size))
+        .text_color(color)
+}
 
 /// Фон Ренат-мода при подключении / без подключения. Свои файлы в data/ главнее встроенных.
 const RENAT_ON: [&str; 6] = [
@@ -53,7 +96,7 @@ fn c(hex: u32) -> Hsla {
 
 pub fn run(root: PathBuf, tray_start: bool, preview: bool) {
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(AppAssets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
             gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
@@ -104,11 +147,11 @@ enum Page {
 }
 
 const PAGES: [(Page, &str, &str); 5] = [
-    (Page::Home, "Подключение", "●"),
-    (Page::Profiles, "Профили WARP", "◆"),
-    (Page::Lists, "Списки доменов", "≡"),
-    (Page::Settings, "Настройки", "⚙"),
-    (Page::Journal, "Журнал", "☰"),
+    (Page::Home, "Связь", "power"),
+    (Page::Profiles, "Профили", "route"),
+    (Page::Lists, "Списки", "list-filter"),
+    (Page::Settings, "Настройки", "settings-2"),
+    (Page::Journal, "Журнал", "scroll-text"),
 ];
 
 enum Modal {
@@ -746,52 +789,58 @@ fn section_title(title: &str, hint: &str) -> Div {
 impl Main {
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let accent = self.accent();
-        let mut nav = div().flex().flex_col().gap_1();
-        for (page, title, icon) in PAGES {
-            let active = self.page == page;
+        let item = |id: SharedString, glyph: &str, label: &str, active: bool| {
+            div()
+                .id(id)
+                .w(px(68.))
+                .py(px(9.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(4.))
+                .rounded(px(12.))
+                .cursor_pointer()
+                .when(active, |s| s.bg(c(SURFACE_HOVER)))
+                .when(!active, |s| s.hover(|s| s.bg(c(SURFACE))))
+                .child(icon(glyph, 21., if active { accent } else { c(MUTED) }))
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .font_weight(if active {
+                            FontWeight::SEMIBOLD
+                        } else {
+                            FontWeight::NORMAL
+                        })
+                        .text_color(if active { c(TEXT) } else { c(MUTED) })
+                        .child(label.to_owned()),
+                )
+        };
+        let mut nav = div().flex().flex_col().items_center().gap_1();
+        for (page, label, glyph) in PAGES {
             nav = nav.child(
-                div()
-                    .id(SharedString::from(format!("nav-{title}")))
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .px(px(12.))
-                    .h(px(40.))
-                    .rounded(px(9.))
-                    .cursor_pointer()
-                    .text_size(px(15.))
-                    .when(active, |s| s.bg(c(SURFACE_HOVER)).text_color(c(TEXT)))
-                    .when(!active, |s| {
-                        s.text_color(c(MUTED))
-                            .hover(|s| s.bg(c(SURFACE)).text_color(c(TEXT)))
-                    })
-                    .child(
-                        div()
-                            .w(px(16.))
-                            .text_color(if active { accent } else { c(MUTED) })
-                            .child(icon),
-                    )
-                    .child(title)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.page = page;
-                        cx.notify();
-                    })),
+                item(
+                    format!("nav-{label}").into(),
+                    glyph,
+                    label,
+                    self.page == page,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.page = page;
+                    cx.notify();
+                })),
             );
         }
         let update_badge = self.pending_update.as_ref().map(|release| {
             let release = release.clone();
-            div()
-                .id("update-badge")
-                .flex()
-                .flex_col()
-                .gap_1()
-                .p(px(12.))
-                .rounded(px(10.))
-                .border_1()
-                .border_color(accent)
-                .cursor_pointer()
-                .child(text(format!("Доступна {}", release.tag), 14., TEXT))
-                .child(text("Нажмите, чтобы обновить", 12., MUTED))
+            item("update-badge".into(), "download", "Обновить", false)
+                .relative()
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(6.))
+                        .right(px(16.))
+                        .child(dot(accent, 8.)),
+                )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.modal = Some(Modal::Update(release.clone()));
                     cx.notify();
@@ -800,11 +849,12 @@ impl Main {
         div()
             .flex()
             .flex_col()
+            .items_center()
             .justify_between()
-            .w(px(230.))
+            .w(px(84.))
             .flex_none()
             .h_full()
-            .p(px(16.))
+            .py(px(14.))
             .bg(if self.settings.renat {
                 hsla(0., 0., 0.05, 0.55)
             } else {
@@ -816,26 +866,24 @@ impl Main {
                 div()
                     .flex()
                     .flex_col()
-                    .gap_5()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .px(px(6.))
-                            .pt(px(6.))
-                            .child(dot(self.state_color(), 12.))
-                            .child(text("WARP Unblock", 18., TEXT).font_weight(FontWeight::BOLD)),
-                    )
+                    .items_center()
+                    .gap_4()
+                    // Щит окрашен цветом состояния: серый, жёлтый, оранжевый/зелёный, красный.
+                    .child(icon("shield-check", 26., self.state_color()))
                     .child(nav),
             )
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .items_center()
+                    .gap_2()
                     .children(update_badge)
-                    .child(text(format!("Версия {}", update::VERSION), 12., MUTED).px(px(6.))),
+                    .child(text(
+                        format!("v{}", update::VERSION.trim_start_matches('v')),
+                        11.,
+                        MUTED,
+                    )),
             )
     }
 
@@ -1848,7 +1896,7 @@ impl Render for Main {
             .relative()
             .size_full()
             .flex()
-            .font_family(FONT)
+            .font_family(font())
             .text_color(c(TEXT))
             .bg(c(BACKGROUND))
             .children(self.backdrop())
