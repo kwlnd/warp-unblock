@@ -1,0 +1,76 @@
+name: Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия релиза, например v0.2.0"
+        required: true
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths: ["windows/**", ".github/workflows/windows.yml"]
+  pull_request:
+    paths: ["windows/**", ".github/workflows/windows.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Версия
+        id: ver
+        shell: pwsh
+        run: |
+          $v = if ("${{ github.event.inputs.version }}") { "${{ github.event.inputs.version }}" } elseif ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "v0.0.0" }
+          "tag=$v" >> $env:GITHUB_OUTPUT
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            windows/source/target
+          key: cargo-${{ hashFiles('windows/source/Cargo.lock') }}
+          restore-keys: cargo-
+
+      - name: Тесты и сборка
+        working-directory: windows/source
+        env:
+          WARP_VERSION: ${{ steps.ver.outputs.tag }}
+        run: |
+          cargo test --locked
+          cargo build --release --locked
+
+      - name: Собрать архив
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          $name = "WarpUnblock-${{ steps.ver.outputs.tag }}-win-x64"
+          $dir = "dist/WarpUnblock"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item windows/source/target/release/warp-unblock.exe "$dir/WarpUnblock.exe"
+          Copy-Item windows/app "$dir/app" -Recurse
+          Copy-Item windows/README.md "$dir/README.md"
+          Copy-Item docs/DOMAIN-LISTS.md "$dir/DOMAIN-LISTS.md"
+          Copy-Item LICENSE, THIRD_PARTY.md $dir
+          Compress-Archive -Path $dir -DestinationPath "dist/$name.zip" -CompressionLevel Optimal
+          (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Set-Content "dist/$name.zip.sha256"
+          "ZIP=dist/$name.zip" >> $env:GITHUB_ENV
+
+      - name: Опубликовать релиз
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ steps.ver.outputs.tag }}"
+          $notes = "Распакуйте архив в любую папку и запустите ``WarpUnblock/WarpUnblock.exe`` (нужны права администратора). Windows x64. Подробности — README.md внутри архива."
+          gh release create $tag $env:ZIP "$($env:ZIP).sha256" --title $tag --notes $notes --target ${{ github.sha }}
