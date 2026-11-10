@@ -2058,7 +2058,8 @@ impl Main {
     fn journal_page(&self, cx: &mut Context<Self>) -> Div {
         let accent = self.accent();
         let root = self.root.clone();
-        let readme = self.root.join("README.md");
+        // README лежит в архиве рядом с папкой программы; если его нет — открываем GitHub.
+        let readme = self.root.parent().map(|dir| dir.join("README.md"));
         let mut events = div().flex().flex_col().gap_1();
         if self.journal.is_empty() {
             events = events.child(text("Событий пока нет", 14., MUTED));
@@ -2089,7 +2090,14 @@ impl Main {
                     )
                     .child(
                         button("readme", "Инструкция", false, true, accent)
-                            .on_click(move |_, _, _| platform::open(&readme)),
+                            .on_click(move |_, _, _| match readme.as_ref().filter(|p| p.is_file()) {
+                                Some(path) => platform::open(path),
+                                None => {
+                                    let _ = open_url(
+                                        "https://github.com/kwlnd/warp-unblock/blob/main/windows/README.md",
+                                    );
+                                }
+                            }),
                     )
                     .child(
                         button("to-lists", "Списки доменов", false, true, accent).on_click(

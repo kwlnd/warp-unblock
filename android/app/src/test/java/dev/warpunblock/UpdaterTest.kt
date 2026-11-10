@@ -37,6 +37,20 @@ class UpdaterTest {
         assertNull(Updater.pick(list, listOf("x86_64"), "0.3.1"))
     }
 
+    @Test fun acceptsCombinedReleasesWithAndroidApks() {
+        val list = JSONArray(listOf(
+            release("android-v0.3.1", apks("0.3.1")),
+            release("v0.6.0", listOf("WarpUnblock-v0.6.0-win-x64.zip", "WarpUnblock-v0.6.0-win-x64.zip.sha256")),
+            release("v0.7.0", listOf("WarpUnblock-v0.7.0-win-x64.zip") + apks("0.7.0")),
+        ))
+        val picked = Updater.pick(list, listOf("arm64-v8a"), "0.3.1")!!
+        assertEquals("v0.7.0", picked.tag)
+        assertEquals("0.7.0", picked.version)
+        assertEquals("WarpUnblock-android-v0.7.0-arm64-v8a.apk", picked.apkName)
+        assertNull(Updater.pick(list, listOf("arm64-v8a"), "0.7.0"))
+        assertNull(Updater.tagVersion("release-1"))
+    }
+
     @Test fun readsChecksumForExactFile() {
         val sum = "a".repeat(64)
         val sums = "${"b".repeat(64)}  other.apk\n$sum  WarpUnblock-android-v0.4.0-arm64-v8a.apk\n"

@@ -8,11 +8,11 @@
 
 | Папка | Что | CI | Теги |
 | --- | --- | --- | --- |
-| `windows/` | Rust-приложение (`source/`), ядра и конфиги (`app/`), скрипты сборки (`tools/`) | `.github/workflows/windows.yml` | `v*` |
-| `android/` | Kotlin + Compose, Gradle-проект | `.github/workflows/android.yml` | `android-v*` |
+| `windows/` | Rust-приложение (`source/`), ядра и конфиги (`app/`), скрипты сборки (`tools/`) | `.github/workflows/windows.yml` | общий `v*` |
+| `android/` | Kotlin + Compose, Gradle-проект | `.github/workflows/android.yml` | общий `v*` |
 | `docs/` | Общая документация, формат списков доменов (`DOMAIN-LISTS.md`) | — | — |
 
-CI запускается только при изменениях в папке своей платформы. Дальше в этом файле — Windows; пути указаны относительно `windows/`. Устройство Android — [android/README.md](../android/README.md).
+CI платформы запускается на push/PR только при изменениях в её папке. Релиз — один на обе платформы: тег `vX.Y.Z` запускает `.github/workflows/release.yml`, он вызывает оба воркфлоу и публикует ZIP, два APK и общий `SHA256SUMS.txt`. Версия одна; Android `versionCode` = major·10000 + minor·100 + patch. Старые теги `android-v*` остались в истории, апдейтер Android их тоже понимает. Дальше в этом файле — Windows; пути указаны относительно `windows/`. Устройство Android — [android/README.md](../android/README.md).
 
 ## Общая схема (Windows)
 
@@ -74,7 +74,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1
 
 ## Релизы
 
-`.github/workflows/windows.yml` собирает exe на `windows-latest` и выкладывает архив `WarpUnblock-<версия>-win-x64.zip` (exe, `app/`, README, LICENSE, THIRD_PARTY.md) с контрольной суммой. Запуск: вручную в Actions с полем версии или пушем тега `v*`.
+`.github/workflows/windows.yml` собирает exe на `windows-latest`; при вызове из `release.yml` упаковывает `WarpUnblock-<версия>-win-x64.zip`: в корне `README.md` и папка `WarpUnblock/` (exe и `app/`, лицензии — в `app/licenses/`), рядом `.sha256`. Релиз запускается пушем тега `v*` или вручную в Actions (Release, поле версии).
 
 ## Оформление
 

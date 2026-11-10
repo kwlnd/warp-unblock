@@ -1,20 +1,20 @@
 name: Windows
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Версия релиза, например v0.2.0"
-        required: true
+  # Проверка на push/PR; релиз собирает release.yml, вызывая этот файл с версией.
   push:
-    tags: ["v*"]
     branches: [main]
     paths: ["windows/**", ".github/workflows/windows.yml"]
   pull_request:
     paths: ["windows/**", ".github/workflows/windows.yml"]
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows:
@@ -28,7 +28,7 @@ jobs:
         id: ver
         shell: pwsh
         run: |
-          $v = if ("${{ github.event.inputs.version }}") { "${{ github.event.inputs.version }}" } elseif ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "v0.0.0" }
+          $v = if ("${{ inputs.version }}") { "${{ inputs.version }}" } else { "v0.0.0" }
           "tag=$v" >> $env:GITHUB_OUTPUT
 
       - uses: dtolnay/rust-toolchain@stable
@@ -50,27 +50,29 @@ jobs:
           cargo build --release --locked
 
       - name: Собрать архив
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: inputs.version != ''
         shell: pwsh
         run: |
+          # В корне архива: README.md и папка WarpUnblock (exe + app). Лицензии — в app/licenses.
           $name = "WarpUnblock-${{ steps.ver.outputs.tag }}-win-x64"
-          $dir = "dist/WarpUnblock"
+          $stage = "dist/stage"
+          $dir = "$stage/WarpUnblock"
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item windows/source/target/release/warp-unblock.exe "$dir/WarpUnblock.exe"
           Copy-Item windows/app "$dir/app" -Recurse
-          Copy-Item windows/README.md "$dir/README.md"
-          Copy-Item docs/DOMAIN-LISTS.md "$dir/DOMAIN-LISTS.md"
-          Copy-Item LICENSE, THIRD_PARTY.md $dir
-          Compress-Archive -Path $dir -DestinationPath "dist/$name.zip" -CompressionLevel Optimal
+          New-Item -ItemType Directory -Force "$dir/app/licenses" | Out-Null
+          Copy-Item LICENSE "$dir/app/licenses/LICENSE.txt"
+          Copy-Item THIRD_PARTY.md "$dir/app/licenses/THIRD-PARTY.txt"
+          Copy-Item windows/README.md "$stage/README.md"
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/$name.zip" -CompressionLevel Optimal
           (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Set-Content "dist/$name.zip.sha256"
           "ZIP=dist/$name.zip" >> $env:GITHUB_ENV
 
-      - name: Опубликовать релиз
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $tag = "${{ steps.ver.outputs.tag }}"
-          $notes = "Распакуйте архив в любую папку и запустите ``WarpUnblock/WarpUnblock.exe`` (нужны права администратора). Windows x64. Подробности — README.md внутри архива."
-          gh release create $tag $env:ZIP "$($env:ZIP).sha256" --title $tag --notes $notes --target ${{ github.sha }}
+      - uses: actions/upload-artifact@v4
+        if: inputs.version != ''
+        with:
+          name: windows
+          path: |
+            dist/*.zip
+            dist/*.zip.sha256
+          if-no-files-found: error

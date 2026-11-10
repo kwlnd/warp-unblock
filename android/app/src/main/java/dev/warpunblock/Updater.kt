@@ -45,8 +45,16 @@ object Updater {
     /** ABI, под которые публикуются APK, в порядке предпочтения телефона. */
     fun abis(): List<String> = Build.SUPPORTED_ABIS.filter { it == "arm64-v8a" || it == "armeabi-v7a" }
 
+    /** Версия из тега: общий `v0.7.0` или старый `android-v0.3.1`; иначе null. */
+    internal fun tagVersion(tag: String): List<Int>? {
+        val bare = tag.removePrefix("android-")
+        if (!bare.startsWith("v")) return null
+        return stableVersion(bare.removePrefix("v"))
+    }
+
     /**
-     * Самый свежий стабильный `android-v*` новее [current], у которого есть APK для одной из [abis].
+     * Самый свежий стабильный релиз новее [current], у которого есть APK для одной из [abis].
+     * С v0.7.0 Windows и Android выходят одним релизом `v*`; старые `android-v*` тоже учитываются.
      * Чистая функция — проверяется unit-тестом.
      */
     internal fun pick(releases: JSONArray, abis: List<String>, current: String): AndroidRelease? {
@@ -56,8 +64,7 @@ object Updater {
             val release = releases.getJSONObject(i)
             if (release.optBoolean("draft", true) || release.optBoolean("prerelease", true)) continue
             val tag = release.optString("tag_name")
-            if (!tag.startsWith("android-v")) continue
-            val version = stableVersion(tag.removePrefix("android-v")) ?: continue
+            val version = tagVersion(tag) ?: continue
             if (compareVersion(version, currentVersion) <= 0) continue
             if (best != null && compareVersion(version, best.first) <= 0) continue
             val assets = release.optJSONArray("assets") ?: continue

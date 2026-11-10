@@ -13,7 +13,7 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
-        versionName = System.getenv("VERSION_NAME") ?: "0.4.0"
+        versionName = System.getenv("VERSION_NAME") ?: "0.7.0"
     }
 
     // Подпись для хобби-проекта: ключ лежит в репозитории, чтобы обновления ставились поверх.
@@ -58,6 +58,17 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            // Снимки экранов: gradle testDebugUnitTest -Pscreenshots=1 → app/build/screenshots/
+            all {
+                val shots = (project.findProperty("screenshots") ?: "").toString()
+                it.systemProperty("warp.screenshots", shots)
+                if (shots.isNotEmpty()) it.systemProperty("roborazzi.test.record", "true")
+            }
+        }
+    }
     buildFeatures {
         compose = true
         buildConfig = true
@@ -68,6 +79,11 @@ dependencies {
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.26.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.26.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     implementation(platform("androidx.compose:compose-bom:2024.09.03"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")

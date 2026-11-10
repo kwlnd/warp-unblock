@@ -14,3 +14,6 @@ android/app/build/
 android/app/src/main/jniLibs/
 android/local.properties
 /android/.kotlin/
+
+# Android: локальные JDK, Gradle и SDK для сборки
+/android/.toolchain/

@@ -8,11 +8,56 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/** Редактор доменов — отдельный раздел, как «Списки доменов» в Windows-версии. */
+@Composable
+internal fun ListsPage(locked: Boolean) {
+    val p = LocalPalette.current
+    val context = LocalContext.current
+    var tab by remember { mutableIntStateOf(0) }
+    var proxy by remember { mutableStateOf(DomainLists.read(context, "proxy-domains.txt")) }
+    var direct by remember { mutableStateOf(DomainLists.read(context, "direct-domains.txt")) }
+    var message by remember { mutableStateOf("") }
+    SectionTitle("Списки доменов", "Один домен на строку, +.example.com включает поддомены. «Напрямую» главнее правил обхода.")
+    WarpCard {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Через WARP", "Напрямую").forEachIndexed { index, title ->
+                FilterChip(
+                    selected = tab == index,
+                    onClick = { tab = index },
+                    label = { Text(title) },
+                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = p.surfaceHover, selectedLabelColor = p.text),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true, selected = tab == index,
+                        borderColor = p.border, selectedBorderColor = p.accent,
+                    ),
+                )
+            }
+        }
+        if (locked) Text("Для сохранения отключите соединение.", fontSize = 13.sp, color = p.warn)
+        if (tab == 0) {
+            OutlinedTextField(proxy, { proxy = it }, minLines = 10, maxLines = 18, enabled = !locked, modifier = Modifier.fillMaxWidth())
+        } else {
+            OutlinedTextField(direct, { direct = it }, minLines = 10, maxLines = 18, enabled = !locked, modifier = Modifier.fillMaxWidth())
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = {
+                message = runCatching { DomainLists.save(context, proxy, direct); "Списки сохранены. Применятся при подключении." }
+                    .getOrElse { it.message ?: "Не удалось сохранить" }
+            }, enabled = !locked) { Text("Сохранить списки") }
+            Text("Строк: ${(if (tab == 0) proxy else direct).lines().count { it.isNotBlank() }}", fontSize = 13.sp, color = p.muted)
+        }
+        if (message.isNotEmpty()) Text(message, fontSize = 13.sp, color = p.muted)
+    }
+}
 
 @Composable
 internal fun SettingsPage(locked: Boolean) {
@@ -22,8 +67,6 @@ internal fun SettingsPage(locked: Boolean) {
     var auto by remember { mutableStateOf(prefs.autoConnect) }
     var mode by remember { mutableStateOf(prefs.appMode) }
     var selected by remember { mutableStateOf(prefs.apps) }
-    var proxy by remember { mutableStateOf(DomainLists.read(context, "proxy-domains.txt")) }
-    var direct by remember { mutableStateOf(DomainLists.read(context, "direct-domains.txt")) }
     var message by remember { mutableStateOf("") }
     var checkUpdates by remember { mutableStateOf(prefs.checkUpdates) }
     val checking by UpdateState.checking.collectAsState()
@@ -40,9 +83,10 @@ internal fun SettingsPage(locked: Boolean) {
             }.filter { it.first != context.packageName }.distinctBy { it.first }.sortedBy { it.second.lowercase() }
         }
     }
-    Card {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Подключение", style = MaterialTheme.typography.titleLarge)
+    SectionTitle("Настройки", "Подключение, приложения в VPN и обновления.")
+    WarpCard {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Подключение", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("При открытии приложения", Modifier.weight(1f))
                 Switch(auto, { auto = it; prefs.autoConnect = it }, enabled = !locked)
@@ -56,9 +100,9 @@ internal fun SettingsPage(locked: Boolean) {
             Text("В настройках VPN выберите WARP Unblock → «Постоянная VPN» (Always-on). «Блокировать соединения без VPN» — системный kill switch. При раздельном туннелировании исключённые приложения могут потерять сеть.")
         }
     }
-    Card {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Приложения в VPN", style = MaterialTheme.typography.titleLarge)
+    WarpCard {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Приложения в VPN", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             listOf("all" to "Все приложения", "allow" to "Только выбранные", "exclude" to "Кроме выбранных").forEach { (key, label) ->
                 TextButton(onClick = { mode = key; prefs.appMode = key }, enabled = !locked) { Text((if (mode == key) "● " else "○ ") + label) }
             }
@@ -77,20 +121,9 @@ internal fun SettingsPage(locked: Boolean) {
             }
         }
     }
-    Card {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Домены", style = MaterialTheme.typography.titleLarge)
-            Text("Один домен на строку. +.example.com включает поддомены, # — комментарий. Кириллица — в punycode. «Напрямую» имеет приоритет.")
-            OutlinedTextField(proxy, { proxy = it }, label = { Text("В обход через WARP") }, minLines = 3, maxLines = 8, enabled = !locked, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(direct, { direct = it }, label = { Text("Напрямую") }, minLines = 3, maxLines = 8, enabled = !locked, modifier = Modifier.fillMaxWidth())
-            FilledTonalButton(onClick = {
-                message = runCatching { DomainLists.save(context, proxy, direct); "Списки сохранены. Применятся при подключении." }.getOrElse { it.message ?: "Не удалось сохранить" }
-            }, enabled = !locked) { Text("Сохранить домены") }
-        }
-    }
-    Card {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Версия ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleLarge)
+    WarpCard {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Версия ${BuildConfig.VERSION_NAME}", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Проверять обновления при запуске", Modifier.weight(1f))
                 Switch(checkUpdates, { checkUpdates = it; prefs.checkUpdates = it })

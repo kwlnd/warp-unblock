@@ -1,20 +1,20 @@
 name: Android
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Версия Android-релиза, например v0.1.0 (тег будет android-v0.1.0)"
-        required: true
+  # Проверка на push/PR; релиз собирает release.yml, вызывая этот файл с версией.
   push:
-    tags: ["android-v*"]
     branches: [main]
     paths: ["android/**", ".github/workflows/android.yml"]
   pull_request:
     paths: ["android/**", ".github/workflows/android.yml"]
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   MIHOMO_VERSION: v1.19.33
@@ -30,14 +30,15 @@ jobs:
       - name: Версия
         id: ver
         env:
-          INPUT_VERSION: ${{ github.event.inputs.version }}
-          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          v="${INPUT_VERSION:-$REF_NAME}"
-          case "$v" in android-v*|v*) ;; *) v="v0.0.0" ;; esac  # проверочная сборка ветки/PR
-          v="${v#android-}"
-          echo "name=${v#v}" >> "$GITHUB_OUTPUT"
-          echo "tag=android-v${v#v}" >> "$GITHUB_OUTPUT"
+          v="${INPUT_VERSION:-v0.0.0}"   # без версии — проверочная сборка ветки/PR
+          v="${v#v}"
+          IFS=. read -r major minor patch <<< "$v"
+          # versionCode растёт вместе с версией: 0.7.0 → 700 (у android-v0.3.1 было 10).
+          code=$(( major * 10000 + minor * 100 + patch ))
+          echo "name=$v" >> "$GITHUB_OUTPUT"
+          echo "code=$(( code > 0 ? code : 1 ))" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@v4
         with:
@@ -87,11 +88,11 @@ jobs:
       - name: Сборка APK
         env:
           VERSION_NAME: ${{ steps.ver.outputs.name }}
-          VERSION_CODE: ${{ github.run_number }}
+          VERSION_CODE: ${{ steps.ver.outputs.code }}
         run: gradle -p android testDebugUnitTest assembleRelease lintRelease --no-daemon
 
       - name: Собрать файлы релиза
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: inputs.version != ''
         run: |
           set -e
           mkdir dist
@@ -100,13 +101,11 @@ jobs:
             test -f "$src"
             cp "$src" "dist/WarpUnblock-android-v${{ steps.ver.outputs.name }}-$abi.apk"
           done
-          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
           ls -la dist
 
-      - name: Опубликовать релиз
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          notes="Два APK: **arm64-v8a** (большинство современных телефонов) и **armeabi-v7a** (старые 32-битные). Установите подходящий, разрешите VPN. Подпись хобби-ключом из репозитория (не для магазина). Контрольные суммы — SHA256SUMS.txt."
-          gh release create "${{ steps.ver.outputs.tag }}" dist/* --title "Android v${{ steps.ver.outputs.name }}" --notes "$notes" --target "$(git rev-parse HEAD)"
+      - uses: actions/upload-artifact@v4
+        if: inputs.version != ''
+        with:
+          name: android
+          path: dist/*.apk
+          if-no-files-found: error

@@ -1,0 +1,71 @@
+name: Release
+
+# Один тег vX.Y.Z — один релиз: Windows ZIP, два Android APK и общий SHA256SUMS.txt.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия релиза, например v0.7.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          v="${INPUT_VERSION:-$REF_NAME}"
+          v="v${v#v}"
+          [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Неверная версия: $v"; exit 1; }
+          echo "tag=$v" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: version
+    uses: ./.github/workflows/windows.yml
+    with:
+      version: ${{ needs.version.outputs.tag }}
+
+  android:
+    needs: version
+    uses: ./.github/workflows/android.yml
+    with:
+      version: ${{ needs.version.outputs.tag }}
+
+  publish:
+    needs: [version, windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Контрольные суммы
+        run: |
+          cd dist
+          sha256sum *.zip *.apk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Опубликовать релиз
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          cat > notes.md <<'EOF'
+          **Windows x64:** распакуйте `WarpUnblock-*-win-x64.zip` в любую папку и запустите `WarpUnblock/WarpUnblock.exe` (нужны права администратора). Инструкция — `README.md` рядом с папкой.
+
+          **Android 7.0+:** `arm64-v8a` — большинство современных телефонов, `armeabi-v7a` — старые 32-битные. Ставится поверх прошлой версии.
+
+          Контрольные суммы всех файлов — `SHA256SUMS.txt`.
+          EOF
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --title "WARP Unblock $TAG" --notes-file notes.md --target "$GITHUB_SHA"
