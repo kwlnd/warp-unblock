@@ -601,7 +601,7 @@ impl App {
                         self.tools.open_editor();
                     }
                     if ui.button("Инструкция").clicked() {
-                        platform::open(&self.root.join("docs/README.md"));
+                        platform::open(&self.root.join("README.md"));
                     }
                 });
                 if self.journal.is_empty() {

@@ -1,4 +1,4 @@
-name: Release
+name: Windows
 
 on:
   workflow_dispatch:
@@ -8,6 +8,10 @@ on:
         required: true
   push:
     tags: ["v*"]
+    branches: [main]
+    paths: ["windows/**", ".github/workflows/windows.yml"]
+  pull_request:
+    paths: ["windows/**", ".github/workflows/windows.yml"]
 
 permissions:
   contents: write
@@ -24,7 +28,7 @@ jobs:
         id: ver
         shell: pwsh
         run: |
-          $v = if ("${{ github.event.inputs.version }}") { "${{ github.event.inputs.version }}" } else { "${{ github.ref_name }}" }
+          $v = if ("${{ github.event.inputs.version }}") { "${{ github.event.inputs.version }}" } elseif ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "v0.0.0" }
           "tag=$v" >> $env:GITHUB_OUTPUT
 
       - uses: dtolnay/rust-toolchain@stable
@@ -33,12 +37,12 @@ jobs:
         with:
           path: |
             ~/.cargo/registry
-            source/target
-          key: cargo-${{ hashFiles('source/Cargo.lock') }}
+            windows/source/target
+          key: cargo-${{ hashFiles('windows/source/Cargo.lock') }}
           restore-keys: cargo-
 
       - name: Тесты и сборка
-        working-directory: source
+        working-directory: windows/source
         env:
           WARP_VERSION: ${{ steps.ver.outputs.tag }}
         run: |
@@ -46,14 +50,15 @@ jobs:
           cargo build --release --locked
 
       - name: Собрать архив
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
           $name = "WarpUnblock-${{ steps.ver.outputs.tag }}-win-x64"
           $dir = "dist/WarpUnblock"
           New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item source/target/release/warp-unblock.exe "$dir/WarpUnblock.exe"
-          Copy-Item app "$dir/app" -Recurse
-          Copy-Item docs/README.md "$dir/README.md"
+          Copy-Item windows/source/target/release/warp-unblock.exe "$dir/WarpUnblock.exe"
+          Copy-Item windows/app "$dir/app" -Recurse
+          Copy-Item windows/README.md "$dir/README.md"
           Copy-Item docs/DOMAIN-LISTS.md "$dir/DOMAIN-LISTS.md"
           Copy-Item LICENSE, THIRD_PARTY.md $dir
           Compress-Archive -Path $dir -DestinationPath "dist/$name.zip" -CompressionLevel Optimal
@@ -61,6 +66,7 @@ jobs:
           "ZIP=dist/$name.zip" >> $env:GITHUB_ENV
 
       - name: Опубликовать релиз
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

@@ -2,7 +2,19 @@
 
 Проект сделан ради интереса, без гарантий. Этот файл — карта для тех, кто хочет разобраться или поправить.
 
-## Общая схема
+## Структура репозитория
+
+Монорепо: одна ветка `main`, у каждой платформы своя папка, свой CI и свои теги.
+
+| Папка | Что | CI | Теги |
+| --- | --- | --- | --- |
+| `windows/` | Rust-приложение (`source/`), ядра и конфиги (`app/`), скрипты сборки (`tools/`) | `.github/workflows/windows.yml` | `v*` |
+| `android/` | Kotlin + Compose, Gradle-проект | `.github/workflows/android.yml` | `android-v*` |
+| `docs/` | Общая документация, формат списков доменов (`DOMAIN-LISTS.md`) | — | — |
+
+CI запускается только при изменениях в папке своей платформы. Дальше в этом файле — Windows; пути указаны относительно `windows/`. Устройство Android — [android/README.md](../android/README.md).
+
+## Общая схема (Windows)
 
 ```
 WarpUnblock.exe (Rust, egui/eframe)
@@ -61,7 +73,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1
 
 ## Релизы
 
-`.github/workflows/release.yml` собирает exe на `windows-latest` и выкладывает архив `WarpUnblock-<версия>-win-x64.zip` (exe, `app/`, README, LICENSE, THIRD_PARTY.md) с контрольной суммой. Запуск: вручную в Actions с полем версии или пушем тега `v*`.
+`.github/workflows/windows.yml` собирает exe на `windows-latest` и выкладывает архив `WarpUnblock-<версия>-win-x64.zip` (exe, `app/`, README, LICENSE, THIRD_PARTY.md) с контрольной суммой. Запуск: вручную в Actions с полем версии или пушем тега `v*`.
 
 ## Не проверено вживую
 

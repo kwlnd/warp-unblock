@@ -8,6 +8,10 @@ on:
         required: true
   push:
     tags: ["android-v*"]
+    branches: [main]
+    paths: ["android/**", ".github/workflows/android.yml"]
+  pull_request:
+    paths: ["android/**", ".github/workflows/android.yml"]
 
 permissions:
   contents: write
@@ -22,9 +26,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Исходники Android живут в ветке android; сам workflow есть и в main, чтобы запускаться из Actions.
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'android' || github.ref }}
 
       - name: Версия
         id: ver
@@ -33,6 +34,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           v="${INPUT_VERSION:-$REF_NAME}"
+          case "$v" in android-v*|v*) ;; *) v="v0.0.0" ;; esac  # проверочная сборка ветки/PR
           v="${v#android-}"
           echo "name=${v#v}" >> "$GITHUB_OUTPUT"
           echo "tag=android-v${v#v}" >> "$GITHUB_OUTPUT"
@@ -89,6 +91,7 @@ jobs:
         run: gradle -p android testDebugUnitTest assembleRelease lintRelease --no-daemon
 
       - name: Собрать файлы релиза
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         run: |
           set -e
           mkdir dist
@@ -101,6 +104,7 @@ jobs:
           ls -la dist
 
       - name: Опубликовать релиз
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

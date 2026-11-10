@@ -1,8 +1,16 @@
-# All local state, credentials, downloaded caches and logs
+# Windows: local state, credentials, caches, logs
+/windows/data/
+/windows/source/target/
+/windows/tools/.cache/
+/windows/WarpUnblock.exe
 /data/
-/source/target/
-/tools/.cache/
-*.log
-/WarpUnblock.exe
-
 /dist/
+*.log
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/jniLibs/
+android/local.properties
+/android/.kotlin/
