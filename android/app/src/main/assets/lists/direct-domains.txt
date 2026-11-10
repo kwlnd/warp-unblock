@@ -1,0 +1,36 @@
+# Domains routed directly (no proxy)
+# "+.domain" = domain + all subdomains, "domain" = exact match
+
++.ru
++.su
++.by
++.ru.com
++.ru.net
++.2ip.ru
++.yastatic.net
++.yandex.net
++.yandex.kz
++.yandex.com
++.yadi.sk
++.mycdn.me
++.jivosite.com
++.vk.com
++.avira.com
++.kudago.com
++.kinescope.io
++.redheadsound.studio
++.plplayer.online
++.lomont.site
++.remanga.org
++.shopstory.live
++.premier.one
++.ozon.com
++.ozonusercontent.com
++.likee.video
++.like.video
++.springer.com
++.springernature.com
++.nextcloud.com
++.okko.tv
++.yappy.media
++.stepik.org
