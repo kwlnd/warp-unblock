@@ -1,66 +1,38 @@
+//! Интерфейс на GPUI: боковая навигация, главный экран со статусом и кнопкой подключения,
+//! страницы профилей, списков доменов, настроек и журнала, модальные окна поверх.
 use crate::{
     engine::{Command, Event, Settings, Worker},
-    platform, strategies, tray,
+    features, platform, strategies, tray, update,
 };
-use eframe::egui::{self, Color32, RichText};
+use gpui_kit::component::input::{Textarea, TextareaState};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 use std::{
     collections::{HashMap, VecDeque},
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+    sync::mpsc,
     time::{Duration, Instant},
 };
 
 // Нейтральный тёмный фон и оранжевый акцент Cloudflare WARP.
-const BACKGROUND: Color32 = Color32::from_rgb(22, 23, 26);
-const SURFACE: Color32 = Color32::from_rgb(33, 35, 40);
-const SURFACE_HOVER: Color32 = Color32::from_rgb(48, 51, 58);
-const BORDER: Color32 = Color32::from_rgb(58, 62, 71);
-const TEXT: Color32 = Color32::from_rgb(240, 242, 245);
-const MUTED: Color32 = Color32::from_rgb(177, 183, 194);
-const ACCENT: Color32 = Color32::from_rgb(246, 130, 31);
-const ACCENT_HOVER: Color32 = Color32::from_rgb(255, 152, 64);
-const ON_ACCENT: Color32 = Color32::from_rgb(28, 16, 4);
-const OK: Color32 = Color32::from_rgb(76, 195, 138);
-const WARN: Color32 = Color32::from_rgb(240, 180, 41);
-const ERROR: Color32 = Color32::from_rgb(242, 102, 109);
+const BACKGROUND: u32 = 0x131418;
+const SIDEBAR: u32 = 0x18191e;
+const SURFACE: u32 = 0x1f2127;
+const SURFACE_HOVER: u32 = 0x2a2d35;
+const BORDER: u32 = 0x33363f;
+const TEXT: u32 = 0xf0f2f5;
+const MUTED: u32 = 0x9aa1ad;
+const ACCENT: u32 = 0xf6821f;
+const ACCENT_HOVER: u32 = 0xff9840;
+const ON_ACCENT: u32 = 0x1c1004;
+const OK: u32 = 0x4cc38a;
+const WARN: u32 = 0xf0b429;
+const ERROR: u32 = 0xf2666d;
+const FONT: &str = "Segoe UI";
 
-/// Ренат-мод включён: карточки чуть прозрачнее, чтобы фон был виден.
-static RENAT: AtomicBool = AtomicBool::new(false);
-/// Текущий оттенок «RGB» (0..1), обновляется каждый кадр.
-static RENAT_HUE: AtomicU32 = AtomicU32::new(0);
-
-fn hue() -> f32 {
-    f32::from_bits(RENAT_HUE.load(Ordering::Relaxed))
-}
-
-/// Акцентный цвет: обычный оранжевый или бегущий по кругу RGB в Ренат-моде.
-fn accent() -> Color32 {
-    if RENAT.load(Ordering::Relaxed) {
-        hsv(hue(), 0.9, 1.0)
-    } else {
-        ACCENT
-    }
-}
-
-fn border() -> Color32 {
-    if RENAT.load(Ordering::Relaxed) {
-        hsv(hue(), 0.85, 0.95)
-    } else {
-        BORDER
-    }
-}
-
-fn surface() -> Color32 {
-    if RENAT.load(Ordering::Relaxed) {
-        Color32::from_rgba_unmultiplied(22, 23, 26, 150)
-    } else {
-        SURFACE
-    }
-}
-
-/// Фон при подключении / без подключения. Свои файлы в data/ главнее встроенных в app/assets/.
+/// Фон Ренат-мода при подключении / без подключения. Свои файлы в data/ главнее встроенных.
 const RENAT_ON: [&str; 6] = [
     "data/renat-on.png",
     "data/renat-on.jpg",
@@ -75,12 +47,90 @@ const RENAT_OFF: [&str; 3] = [
     "app/assets/renat-off.jpg",
 ];
 
-pub struct App {
+fn c(hex: u32) -> Hsla {
+    rgb(hex).into()
+}
+
+pub fn run(root: PathBuf, tray_start: bool, preview: bool) {
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx: &mut App| {
+            gpui_kit::init(cx);
+            gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
+            let bounds = Bounds::centered(None, size(px(980.), px(760.)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("WARP Unblock".into()),
+                    ..Default::default()
+                }),
+                window_min_size: Some(size(px(720.), px(540.))),
+                show: !tray_start || preview,
+                focus: !tray_start || preview,
+                ..Default::default()
+            };
+            let opened = gpui_kit::open_window(options, cx, |window, cx| {
+                cx.new(|cx| Main::new(root.clone(), tray_start, preview, window, cx))
+            });
+            match opened {
+                Ok((_, view)) => {
+                    let weak = view.downgrade();
+                    let window = cx.windows().first().cloned();
+                    if let Some(window) = window {
+                        let _ = window.update(cx, |_, window, cx| {
+                            window.on_window_should_close(cx, move |window, cx| {
+                                weak.update(cx, |this, cx| this.should_close(window, cx))
+                                    .unwrap_or(true)
+                            });
+                        });
+                    }
+                }
+                Err(error) => {
+                    platform::error_box(&format!("Не удалось открыть окно: {error:#}"));
+                    cx.quit();
+                }
+            }
+            cx.on_window_closed(|cx, _| cx.quit()).detach();
+        });
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Home,
+    Profiles,
+    Lists,
+    Settings,
+    Journal,
+}
+
+const PAGES: [(Page, &str, &str); 5] = [
+    (Page::Home, "Подключение", "●"),
+    (Page::Profiles, "Профили WARP", "◆"),
+    (Page::Lists, "Списки доменов", "≡"),
+    (Page::Settings, "Настройки", "⚙"),
+    (Page::Journal, "Журнал", "☰"),
+];
+
+enum Modal {
+    Close,
+    Update(update::Release),
+    Installing(String, f32),
+    Qr(qrcode::QrCode),
+}
+
+enum UpdateMsg {
+    Checked(Result<Option<update::Release>, String>, bool),
+    Progress(String, f32),
+    Done(Result<usize, String>),
+}
+
+struct Main {
     root: PathBuf,
     preview: bool,
     worker: Worker,
     settings: Settings,
     catalog: Vec<strategies::Strategy>,
+    page: Page,
     busy: bool,
     stage: Option<(usize, usize, String)>,
     batch: Option<(usize, usize, usize)>,
@@ -90,96 +140,49 @@ pub struct App {
     checks: [(String, bool); 4],
     journal: VecDeque<String>,
     engine_log: String,
-    /// Результаты последнего подбора: индекс профиля -> задержка (None — не прошёл).
     results: HashMap<usize, Option<u64>>,
     last_tail: Instant,
     last_health: Option<Instant>,
-    close_dialog: bool,
     tray: Option<tray::Tray>,
-    renat_on: Option<egui::TextureHandle>,
-    renat_off: Option<egui::TextureHandle>,
-    renat_loaded: bool,
+    modal: Option<Modal>,
     allow_close: bool,
-    tools: crate::features::Tools,
+    started: Instant,
+    // Списки доменов: три редактора и сообщение о сохранении.
+    lists: Option<[Entity<TextareaState>; 3]>,
+    list_tab: usize,
+    list_message: String,
+    custom_args: Entity<TextareaState>,
+    // Фоновые задачи настроек.
+    task_rx: Option<mpsc::Receiver<anyhow::Result<String>>>,
+    task_message: String,
+    services_rx: Option<mpsc::Receiver<Vec<features::Service>>>,
+    services: Vec<features::Service>,
+    update_rx: Option<mpsc::Receiver<UpdateMsg>>,
+    update_message: String,
+    pending_update: Option<update::Release>,
+    install_after_stop: Option<update::Release>,
 }
 
-impl App {
-    pub fn new(
-        cc: &eframe::CreationContext<'_>,
+impl Main {
+    fn new(
         root: PathBuf,
         tray_start: bool,
         preview: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Self {
-        let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = BACKGROUND;
-        visuals.window_fill = SURFACE;
-        visuals.window_stroke = egui::Stroke::new(1.0, BORDER);
-        visuals.override_text_color = Some(TEXT);
-        visuals.selection.bg_fill = Color32::from_rgb(120, 66, 20);
-        visuals.selection.stroke = egui::Stroke::new(1.0, ACCENT);
-        visuals.extreme_bg_color = Color32::from_rgb(17, 18, 20);
-        visuals.collapsing_header_frame = false;
-        let radius = egui::CornerRadius::same(8);
-        let widgets = &mut visuals.widgets;
-        widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, BORDER);
-        for (state, fill) in [
-            (&mut widgets.inactive, SURFACE_HOVER),
-            (&mut widgets.hovered, Color32::from_rgb(62, 66, 75)),
-            (&mut widgets.active, Color32::from_rgb(72, 77, 87)),
-        ] {
-            state.bg_fill = fill;
-            state.weak_bg_fill = fill;
-            state.bg_stroke = egui::Stroke::new(1.0, BORDER);
-            state.corner_radius = radius;
-        }
-        widgets.hovered.bg_stroke = egui::Stroke::new(1.0, ACCENT);
-        widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT);
-        widgets.open.corner_radius = radius;
-        cc.egui_ctx.set_visuals(visuals);
-        let mut style = (*cc.egui_ctx.style()).clone();
-        style.interaction.selectable_labels = false;
-        style.interaction.multi_widget_text_select = false;
-        style.spacing.item_spacing = egui::vec2(10.0, 10.0);
-        style.spacing.button_padding = egui::vec2(14.0, 9.0);
-        style
-            .text_styles
-            .insert(egui::TextStyle::Body, egui::FontId::proportional(16.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Button, egui::FontId::proportional(16.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Small, egui::FontId::proportional(14.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Monospace, egui::FontId::monospace(13.0));
-        cc.egui_ctx.set_style(style);
-        let windows = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-        if let Ok(font) = fs::read(PathBuf::from(windows).join("Fonts/segoeui.ttf")) {
-            let mut fonts = egui::FontDefinitions::default();
-            fonts
-                .font_data
-                .insert("segoe".into(), egui::FontData::from_owned(font).into());
-            fonts
-                .families
-                .entry(egui::FontFamily::Proportional)
-                .or_default()
-                .insert(0, "segoe".into());
-            cc.egui_ctx.set_fonts(fonts);
-        }
         let mut settings = Settings::load(&root);
         let catalog = strategies::load(&root).unwrap_or_else(|_| {
             serde_json::from_str(include_str!("../../app/config/strategies.json"))
                 .expect("built-in catalog")
         });
         settings.strategy = settings.strategy.min(catalog.len() - 1);
-        let root_for_results = root.clone();
         let worker = Worker::new(root.clone());
         worker.send(Command::Check);
         let tray = if preview {
             None
         } else {
-            tray::Tray::new(cc.egui_ctx.clone(), worker.handle(), root.clone())
+            tray::Tray::new(worker.handle(), root.clone())
         };
         if tray_start && !preview {
             if tray.is_some() {
@@ -197,12 +200,19 @@ impl App {
                 let _ = platform::set_autostart(true, &root);
             });
         }
-        Self {
+        let custom_args = cx.new(|cx| {
+            let mut state = TextareaState::new(window, cx);
+            state.set_value(settings.custom_args.clone(), window, cx);
+            state
+        });
+        let results = load_results(&root);
+        let mut this = Self {
             root,
             preview,
             worker,
             settings,
             catalog,
+            page: Page::Home,
             busy: true,
             stage: None,
             batch: None,
@@ -217,18 +227,51 @@ impl App {
             ],
             journal: VecDeque::new(),
             engine_log: String::new(),
-            results: load_results(&root_for_results),
+            results,
             last_tail: Instant::now(),
             last_health: None,
-            close_dialog: false,
             tray,
-            renat_on: None,
-            renat_off: None,
-            renat_loaded: false,
+            modal: None,
             allow_close: false,
-            tools: Default::default(),
+            started: Instant::now(),
+            lists: None,
+            list_tab: 0,
+            list_message: String::new(),
+            custom_args,
+            task_rx: None,
+            task_message: String::new(),
+            services_rx: None,
+            services: Vec::new(),
+            update_rx: None,
+            update_message: String::new(),
+            pending_update: None,
+            install_after_stop: None,
+        };
+        if this.settings.check_updates
+            && (!preview || std::env::var_os("WARP_PREVIEW_UPDATE").is_some())
+        {
+            this.check_updates(false);
         }
+        // Опрос движка и анимация: таймер на главном потоке, живёт и при скрытом окне.
+        cx.spawn_in(window, async move |this, cx| loop {
+            let renat = this
+                .update_in(cx, |this, window, cx| {
+                    this.tick(window, cx);
+                    this.settings.renat
+                })
+                .unwrap_or(false);
+            if this.upgrade().is_none() {
+                break;
+            }
+            cx.background_executor()
+                .timer(Duration::from_millis(if renat { 33 } else { 120 }))
+                .await;
+        })
+        .detach();
+        this
     }
+
+    // ---------- состояние ----------
 
     fn action(&mut self, command: Command, status: &str) {
         self.stopping = matches!(command, Command::Stop);
@@ -239,7 +282,13 @@ impl App {
         self.worker.send(command);
     }
 
-    fn journal(&mut self, text: String) {
+    fn connect_settings(&mut self, cx: &App) -> Settings {
+        self.settings.custom_args = self.custom_args.read(cx).value().to_string();
+        let _ = self.settings.save(&self.root);
+        self.settings.clone()
+    }
+
+    fn log(&mut self, text: String) {
         if self.journal.len() >= 300 {
             self.journal.pop_front();
         }
@@ -250,404 +299,52 @@ impl App {
         self.running && self.checks.iter().all(|(_, ok)| *ok)
     }
 
-    fn color(&self) -> Color32 {
+    fn locked(&self) -> bool {
+        self.task_rx.is_some()
+    }
+
+    fn state_color(&self) -> Hsla {
         if self.busy {
-            WARN
+            c(WARN)
         } else if self.healthy() {
-            OK
+            c(OK)
         } else if self.running {
-            ERROR
+            c(ERROR)
         } else {
-            MUTED
+            c(MUTED)
         }
     }
 
-    fn connection_button(&mut self, ui: &mut egui::Ui) {
-        if self.preview {
-            ui.label("Предпросмотр интерфейса · подключение недоступно");
-            return;
-        }
-        if self.tools.locked() {
-            ui.label("Завершите операцию с настройками…");
-            return;
-        }
-        let active = self.running || self.busy;
-        let label = if self.stopping {
-            "Отключаю…"
+    fn title(&self) -> String {
+        if self.busy {
+            self.status.clone()
+        } else if self.running && self.healthy() {
+            "Обход работает".into()
+        } else if self.running && self.checks[2].1 {
+            "Нейросети: нет связи с Opera".into()
         } else if self.running {
-            "Отключить"
-        } else if self.busy {
-            "Отменить"
+            "Нет связи с WARP".into()
         } else {
-            "Подключить"
-        };
-        if self.settings.renat && !self.stopping {
-            let label = if self.running {
-                "Перестать моггать"
-            } else if self.busy {
-                "Отменить"
-            } else {
-                "Моггать"
-            };
-            if rainbow_button(ui, label) {
-                if active {
-                    self.action(Command::Stop, "Отключаю…");
-                } else {
-                    self.action(Command::Start(self.settings.clone()), "Подключаю…");
-                }
-            }
-            return;
-        }
-        let fill = if active { SURFACE_HOVER } else { ACCENT };
-        let text_color = if active { TEXT } else { ON_ACCENT };
-        if ui
-            .add_enabled(
-                !self.stopping,
-                egui::Button::new((
-                    egui::Atom::grow(),
-                    RichText::new(label).size(19.0).strong().color(text_color),
-                    egui::Atom::grow(),
-                ))
-                .fill(fill)
-                .stroke(egui::Stroke::new(
-                    1.0,
-                    if active { BORDER } else { ACCENT_HOVER },
-                ))
-                .corner_radius(10.0)
-                .min_size(egui::vec2(ui.available_width(), 56.0)),
-            )
-            .clicked()
-        {
-            if active {
-                self.action(Command::Stop, "Отключаю…");
-            } else {
-                self.action(Command::Start(self.settings.clone()), "Подключаю…");
-            }
+            self.status.clone()
         }
     }
 
-    fn progress(&self, ui: &mut egui::Ui) {
-        let bar = |ui: &mut egui::Ui, fraction: f32, height: f32| {
-            ui.add(
-                egui::ProgressBar::new(fraction.clamp(0.0, 1.0))
-                    .fill(accent())
-                    .desired_height(height)
-                    .corner_radius(height / 2.0),
-            );
-        };
-        if let Some((done, total, failed)) = self.batch {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Подбор профиля").size(14.0).color(MUTED));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(format!("проверено {done} из {total}"))
-                            .size(14.0)
-                            .color(TEXT),
-                    );
-                    if failed > 0 {
-                        ui.label(
-                            RichText::new(format!("не прошло {failed}  "))
-                                .size(14.0)
-                                .color(ERROR),
-                        );
-                    }
-                });
-            });
-            bar(ui, done as f32 / total.max(1) as f32, 10.0);
-        }
-        if let Some((done, total, text)) = &self.stage {
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(text).size(14.0).color(MUTED));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(format!("этап {} из {total}", (done + 1).min(*total)))
-                            .size(14.0)
-                            .color(MUTED),
-                    );
-                });
-            });
-            bar(ui, *done as f32 / (*total).max(1) as f32, 6.0);
-        }
+    fn hue(&self) -> f32 {
+        (self.started.elapsed().as_secs_f32() * 0.25).rem_euclid(1.0)
     }
 
-    fn profiles(&mut self, ui: &mut egui::Ui) {
-        let current = if self.settings.custom {
-            "Свои аргументы".to_owned()
+    fn accent(&self) -> Hsla {
+        if self.settings.renat {
+            hsla(self.hue(), 0.9, 0.55, 1.0)
         } else {
-            self.catalog[self.settings.strategy]
-                .name
-                .replace("WARP · ", "")
-        };
-        let right = ui.max_rect().right();
-        let response =
-            egui::CollapsingHeader::new(RichText::new("Профиль WARP").size(16.0).strong())
-                .id_salt("profile")
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.add_space(4.0);
-                    ui.add_enabled_ui(
-                        !self.preview && !self.busy && !self.running && !self.tools.locked(),
-                        |ui| {
-                            egui::ComboBox::from_id_salt("strategy")
-                                .width(ui.available_width() - 12.0)
-                                .height(220.0)
-                                .selected_text(if self.settings.custom {
-                                    "Свои аргументы winws"
-                                } else {
-                                    &self.catalog[self.settings.strategy].name
-                                })
-                                .show_ui(ui, |ui| {
-                                    for (index, profile) in self.catalog.iter().enumerate() {
-                                        let (color, label) =
-                                            mark(self.results.get(&index), &profile.name);
-                                        let selected = !self.settings.custom
-                                            && self.settings.strategy == index;
-                                        let clicked = ui
-                                            .horizontal(|ui| {
-                                                let x = ui.cursor().min.x;
-                                                ui.add_space(14.0);
-                                                let row = ui.selectable_label(selected, label);
-                                                ui.painter().circle_filled(
-                                                    egui::pos2(x + 5.0, row.rect.center().y),
-                                                    4.5,
-                                                    color,
-                                                );
-                                                row.clicked()
-                                            })
-                                            .inner;
-                                        if clicked {
-                                            self.settings.strategy = index;
-                                            self.settings.custom = false;
-                                        }
-                                    }
-                                    ui.selectable_value(
-                                        &mut self.settings.custom,
-                                        true,
-                                        "Свои аргументы winws",
-                                    );
-                                });
-                            if self.settings.custom {
-                                ui.label("Аргументы winws");
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut self.settings.custom_args)
-                                        .desired_rows(2)
-                                        .desired_width(f32::INFINITY),
-                                );
-                            }
-                            ui.horizontal_wrapped(|ui| {
-                                if ui.button("Тест профиля").clicked() {
-                                    self.action(
-                                        Command::Test(self.settings.clone()),
-                                        "Проверяю профиль…",
-                                    );
-                                }
-                                if ui.button("Выбрать лучший").clicked() {
-                                    self.action(
-                                        Command::Best(self.settings.clone()),
-                                        "Сравниваю все профили…",
-                                    );
-                                }
-                                if ui.button("Подобрать автоматически").clicked()
-                                {
-                                    self.action(
-                                        Command::Auto(self.settings.clone()),
-                                        "Подбираю профиль WARP…",
-                                    );
-                                }
-                            });
-                            if let Some(stat) =
-                                crate::features::stats(&self.root).get(&self.settings.strategy)
-                            {
-                                ui.label(format!(
-                                    "Успешно {}/{} · средняя задержка {} мс",
-                                    stat.successes,
-                                    stat.attempts,
-                                    stat.total_ms / stat.successes.max(1)
-                                ));
-                            }
-                            ui.label(
-                                RichText::new(
-                                    "Проверка без TUN. Перед тестом отключите другой VPN.",
-                                )
-                                .size(14.0)
-                                .color(MUTED),
-                            );
-                        },
-                    );
-                });
-        ui.painter().text(
-            egui::pos2(right, response.header_response.rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            current,
-            egui::FontId::proportional(14.0),
-            MUTED,
-        );
-    }
-
-    fn details(&mut self, ui: &mut egui::Ui) {
-        let color = self.color();
-        let right = ui.max_rect().right();
-        let response = egui::CollapsingHeader::new(RichText::new("Статус").size(16.0).strong())
-            .id_salt("status")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.add_space(4.0);
-                egui::Grid::new("checks")
-                    .num_columns(2)
-                    .spacing([20.0, 8.0])
-                    .show(ui, |ui| {
-                        for (index, title) in ["Компоненты", "Профиль", "Тоннель", "Нейросети"]
-                            .iter()
-                            .enumerate()
-                        {
-                            ui.label(RichText::new(*title).color(MUTED));
-                            ui.label(
-                                RichText::new(&self.checks[index].0)
-                                    .color(if self.checks[index].1 { OK } else { MUTED }),
-                            );
-                            ui.end_row();
-                        }
-                    });
-                if self.running {
-                    if let Some(last) = self.last_health {
-                        ui.label(
-                            RichText::new(format!(
-                                "Проверено {} с назад · обновляется автоматически",
-                                last.elapsed().as_secs()
-                            ))
-                            .size(14.0)
-                            .color(MUTED),
-                        );
-                    }
-                }
-            });
-        ui.painter().circle_filled(
-            egui::pos2(right - 6.0, response.header_response.rect.center().y),
-            5.0,
-            color,
-        );
-    }
-
-    fn options(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new(RichText::new("Настройки").size(16.0).strong())
-            .id_salt("options")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.add_space(4.0);
-                ui.add_enabled_ui(!self.tools.locked(), |ui| {
-                    let mut changed = false;
-                    let mut autostart = self.settings.autostart;
-                    if switch_row(
-                        ui,
-                        "Запускать вместе с Windows",
-                        "Тихо, в трее, с автоподключением",
-                        &mut autostart,
-                    ) {
-                        match platform::set_autostart(autostart, &self.root) {
-                            Ok(()) => {
-                                self.settings.autostart = autostart;
-                                changed = true;
-                            }
-                            Err(error) => {
-                                self.journal(format!("Автозапуск не изменён: {error:#}"));
-                            }
-                        }
-                    }
-                    if switch_row(
-                        ui,
-                        "Крестик сворачивает в трей",
-                        "Выключено — крестик закрывает приложение",
-                        &mut self.settings.close_to_tray,
-                    ) {
-                        changed = true;
-                    }
-                    let hint = if self.renat_on.is_some() || self.renat_off.is_some() {
-                        "Радужная кнопка, фон зависит от подключения"
-                    } else {
-                        "Свои картинки: data/renat-on.png и renat-off.png"
-                    };
-                    if switch_row(ui, "Ренат мод", hint, &mut self.settings.renat) {
-                        changed = true;
-                    }
-                    if changed {
-                        let _ = self.settings.save(&self.root);
-                    }
-                });
-                self.tools.show(
-                    ui,
-                    &self.root,
-                    &self.settings,
-                    self.busy || self.running,
-                    self.running,
-                );
-            });
-    }
-
-    fn logs(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new(RichText::new("Журнал").size(16.0).strong())
-            .id_salt("journal")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Открыть логи").clicked() {
-                        let path = self.root.join("data/logs");
-                        let _ = fs::create_dir_all(&path);
-                        platform::open(&path);
-                    }
-                    if ui.button("Списки доменов").clicked() {
-                        self.tools.open_editor();
-                    }
-                    if ui.button("Инструкция").clicked() {
-                        platform::open(&self.root.join("README.md"));
-                    }
-                });
-                if self.journal.is_empty() {
-                    ui.label(RichText::new("Событий пока нет").size(14.0).color(MUTED));
-                }
-                egui::ScrollArea::vertical()
-                    .id_salt("events")
-                    .max_height(170.0)
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for text in &self.journal {
-                            ui.label(RichText::new(text).size(14.0).color(MUTED));
-                        }
-                    });
-                if !self.engine_log.is_empty() {
-                    egui::CollapsingHeader::new("Подробный лог mihomo")
-                        .id_salt("engine-log")
-                        .show(ui, |ui| {
-                            egui::ScrollArea::vertical()
-                                .id_salt("engine-log-scroll")
-                                .max_height(170.0)
-                                .show(ui, |ui| {
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(&self.engine_log)
-                                                .monospace()
-                                                .size(13.0)
-                                                .color(MUTED),
-                                        )
-                                        .wrap(),
-                                    );
-                                });
-                        });
-                }
-            });
-    }
-}
-
-impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if let Some(settings) = self.tools.poll(&self.root) {
-            self.settings = settings;
+            c(ACCENT)
         }
+    }
+
+    fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         while let Ok(event) = self.worker.rx.try_recv() {
             match event {
-                Event::Log(text) => self.journal(text),
+                Event::Log(text) => self.log(text),
                 Event::State {
                     busy,
                     running,
@@ -678,22 +375,44 @@ impl eframe::App for App {
                 }
             }
         }
+        if let Some(result) = self.task_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.task_rx = None;
+            self.task_message = match result {
+                Ok(text) => {
+                    if text.starts_with("Импортировано.") {
+                        self.settings = Settings::load(&self.root);
+                        self.lists = None;
+                    }
+                    text
+                }
+                Err(error) => format!("Ошибка: {error:#}"),
+            };
+        }
+        if let Some(result) = self.services_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.services = result;
+            self.services_rx = None;
+        }
+        while let Some(message) = self.update_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.on_update(message);
+        }
+        if let Some(release) = self.install_after_stop.take() {
+            if self.running || self.busy {
+                self.install_after_stop = Some(release);
+            } else {
+                self.start_install(release);
+            }
+        }
         if self.last_tail.elapsed() > Duration::from_secs(1) {
             self.results = load_results(&self.root);
             self.engine_log = tail(&self.root.join("data/logs/mihomo.log"));
             self.last_tail = Instant::now();
         }
-        if tray::QUIT.load(std::sync::atomic::Ordering::Relaxed) {
-            self.allow_close = true;
+        if tray::QUIT.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            self.quit(cx);
+            return;
         }
-        if ctx.input(|input| input.viewport().close_requested()) && !self.allow_close {
-            if self.settings.close_to_tray && self.tray.is_some() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                platform::show_main_window(false);
-            } else if self.running || self.busy {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.close_dialog = true;
-            }
+        if self.page == Page::Lists && self.lists.is_none() {
+            self.load_lists(window, cx);
         }
         let healthy = self.healthy();
         if let Some(tray) = &mut self.tray {
@@ -717,186 +436,1452 @@ impl eframe::App for App {
             };
             tray.update(look, tip);
         }
-        let renat = self.settings.renat;
-        RENAT.store(renat, Ordering::Relaxed);
-        let hue_now = (ctx.input(|input| input.time) as f32 * 0.25).rem_euclid(1.0);
-        RENAT_HUE.store(hue_now.to_bits(), Ordering::Relaxed);
-        ctx.style_mut(|style| {
-            let color = accent();
-            style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, color);
-            style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, color);
-            style.visuals.selection.stroke = egui::Stroke::new(1.0, color);
-            style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, border());
+        cx.notify();
+    }
+
+    fn should_close(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.allow_close {
+            return true;
+        }
+        if self.settings.close_to_tray && self.tray.is_some() {
+            platform::show_main_window(false);
+            return false;
+        }
+        if self.running || self.busy {
+            self.modal = Some(Modal::Close);
+            cx.notify();
+            return false;
+        }
+        self.worker.send(Command::Shutdown);
+        true
+    }
+
+    fn quit(&mut self, cx: &mut Context<Self>) {
+        self.allow_close = true;
+        self.worker.send(Command::Shutdown);
+        // Дать движку остановить дочерние процессы; Job Object всё равно завершит их при выходе.
+        std::thread::sleep(Duration::from_millis(300));
+        cx.quit();
+    }
+
+    // ---------- обновления ----------
+
+    fn check_updates(&mut self, manual: bool) {
+        if self.update_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.update_rx = Some(rx);
+        if manual {
+            self.update_message = "Проверяю обновления…".into();
+        }
+        std::thread::spawn(move || {
+            let result = update::check().map_err(|e| format!("{e:#}"));
+            let _ = tx.send(UpdateMsg::Checked(result, manual));
         });
-        if renat && !self.renat_loaded {
-            self.renat_loaded = true;
-            self.renat_on = load_renat(ctx, &self.root, "renat-on", &RENAT_ON);
-            self.renat_off = load_renat(ctx, &self.root, "renat-off", &RENAT_OFF);
-        }
-        let panel_fill = if renat {
-            Color32::from_black_alpha(40)
-        } else {
-            BACKGROUND
-        };
-        if renat {
-            let backdrop = if self.running {
-                self.renat_on.as_ref()
-            } else {
-                self.renat_off.as_ref()
-            };
-            paint_backdrop(ctx, backdrop);
-            // Радужная кнопка анимируется, поэтому перерисовываем чаще.
-            ctx.request_repaint_after(Duration::from_millis(33));
-        }
-        egui::TopBottomPanel::bottom("connection")
-            .show_separator_line(false)
-            .frame(egui::Frame::new().fill(panel_fill).inner_margin(20.0))
-            .show(ctx, |ui| self.connection_button(ui));
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(panel_fill).inner_margin(20.0))
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(surface())
-                    .stroke(egui::Stroke::new(1.0, border()))
-                    .corner_radius(12.0)
-                    .inner_margin(16.0)
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            if self.busy {
-                                ui.spinner();
-                            } else {
-                                let (rect, _) = ui.allocate_exact_size(
-                                    egui::vec2(12.0, 22.0),
-                                    egui::Sense::hover(),
-                                );
-                                ui.painter().circle_filled(rect.center(), 4.5, self.color());
-                            }
-                            ui.vertical(|ui| {
-                                let title = if self.busy {
-                                    &self.status
-                                } else if self.running && self.healthy() {
-                                    "Обход работает"
-                                } else if self.running && self.checks[2].1 {
-                                    "Нейросети: нет связи с Opera"
-                                } else if self.running {
-                                    "Нет связи с WARP"
-                                } else {
-                                    &self.status
-                                };
-                                ui.label(RichText::new(title).size(22.0).strong());
-                                if self.running && !self.busy {
-                                    ui.label(
-                                        RichText::new(if self.checks[2].1 {
-                                            &self.checks[3].0
-                                        } else {
-                                            &self.checks[2].0
-                                        })
-                                        .size(13.0)
-                                        .color(MUTED),
-                                    );
-                                }
-                            });
-                        });
-                        if self.busy {
-                            self.progress(ui);
+    }
+
+    fn on_update(&mut self, message: UpdateMsg) {
+        match message {
+            UpdateMsg::Checked(result, manual) => {
+                self.update_rx = None;
+                match result {
+                    Ok(Some(release)) => {
+                        self.update_message = format!("Доступна {}", release.tag);
+                        self.pending_update = Some(release.clone());
+                        let skipped = !manual && self.settings.skip_version == release.tag;
+                        if !skipped && self.modal.is_none() {
+                            self.modal = Some(Modal::Update(release));
                         }
-                    });
-                ui.add_space(8.0);
-                if ui.button("Редактировать списки проксирования").clicked()
-                {
-                    self.tools.open_editor();
+                    }
+                    Ok(None) => {
+                        self.update_message = format!("Версия {} актуальна", update::VERSION)
+                    }
+                    Err(error) if manual => {
+                        self.update_message = format!("Не удалось проверить: {error}")
+                    }
+                    Err(_) => {}
                 }
-                ui.add_space(8.0);
-                egui::ScrollArea::vertical()
-                    .id_salt("sections")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        card(ui, |ui| self.profiles(ui));
-                        card(ui, |ui| self.details(ui));
-                        card(ui, |ui| self.options(ui));
-                        card(ui, |ui| self.logs(ui));
-                    });
-            });
-        self.tools
-            .editor_window(ctx, &self.root, self.busy || self.running);
-        if self.close_dialog {
-            egui::Window::new("Закрыть приложение?")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-                .show(ctx, |ui| {
-                    ui.label("Подключение будет остановлено.");
-                    ui.horizontal(|ui| {
-                        if ui.button("Остановить и закрыть").clicked() {
-                            self.worker.send(Command::Shutdown);
+            }
+            UpdateMsg::Progress(text, fraction) => {
+                self.modal = Some(Modal::Installing(text, fraction));
+            }
+            UpdateMsg::Done(result) => {
+                self.update_rx = None;
+                match result {
+                    Ok(_) => match update::restart() {
+                        Ok(()) => {
                             self.allow_close = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            self.worker.send(Command::Shutdown);
+                            std::process::exit(0);
                         }
-                        if ui.button("Остаться").clicked() {
-                            self.close_dialog = false;
+                        Err(error) => {
+                            self.modal = None;
+                            self.update_message =
+                                format!("Обновление установлено, перезапустите вручную: {error:#}");
                         }
-                    });
-                });
+                    },
+                    Err(error) => {
+                        self.modal = None;
+                        self.update_message = format!("Обновление не установлено: {error}");
+                        self.log(self.update_message.clone());
+                    }
+                }
+            }
         }
-        ctx.request_repaint_after(Duration::from_millis(250));
+    }
+
+    fn begin_install(&mut self, release: update::Release) {
+        self.modal = Some(Modal::Installing("Останавливаю соединение…".into(), 0.0));
+        if self.running || self.busy {
+            self.action(Command::Stop, "Отключаю для обновления…");
+            self.install_after_stop = Some(release);
+        } else {
+            self.start_install(release);
+        }
+    }
+
+    fn start_install(&mut self, release: update::Release) {
+        let (tx, rx) = mpsc::channel();
+        self.update_rx = Some(rx);
+        let root = self.root.clone();
+        std::thread::spawn(move || {
+            let progress = |step: update::Step| {
+                let message = match step {
+                    update::Step::Download(done, total) => UpdateMsg::Progress(
+                        format!(
+                            "Скачиваю {:.1} из {:.1} МБ",
+                            done as f64 / 1048576.0,
+                            total as f64 / 1048576.0
+                        ),
+                        if total > 0 {
+                            done as f32 / total as f32 * 0.85
+                        } else {
+                            0.0
+                        },
+                    ),
+                    update::Step::Verify => UpdateMsg::Progress("Проверяю SHA-256…".into(), 0.9),
+                    update::Step::Install => {
+                        UpdateMsg::Progress("Устанавливаю файлы…".into(), 0.95)
+                    }
+                };
+                let _ = tx.send(message);
+            };
+            let result = features::guarded(|| {
+                update::install(&root, &release, &progress).map(|n| n.to_string())
+            });
+            let _ = tx.send(UpdateMsg::Done(
+                result
+                    .map(|n| n.parse().unwrap_or(0))
+                    .map_err(|e| format!("{e:#}")),
+            ));
+        });
+    }
+
+    // ---------- настройки ----------
+
+    fn task(&mut self, task: impl FnOnce() -> anyhow::Result<String> + Send + 'static) {
+        let (tx, rx) = mpsc::channel();
+        self.task_rx = Some(rx);
+        self.task_message = "Выполняю…".into();
+        std::thread::spawn(move || {
+            let _ = tx.send(features::guarded(task));
+        });
+    }
+
+    fn save_settings(&mut self) {
+        let _ = self.settings.save(&self.root);
+    }
+
+    fn load_lists(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match features::read_lists(&self.root) {
+            Ok(values) => {
+                let editors = values.map(|text| {
+                    cx.new(|cx| {
+                        let mut state = TextareaState::new(window, cx);
+                        state.set_value(text, window, cx);
+                        state
+                    })
+                });
+                self.lists = Some(editors);
+            }
+            Err(error) => self.list_message = format!("Не удалось прочитать списки: {error}"),
+        }
+    }
+
+    fn save_lists(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editors) = &self.lists else { return };
+        let values: [String; 3] = std::array::from_fn(|i| editors[i].read(cx).value().to_string());
+        match features::save_lists(&self.root, &values) {
+            Ok(saved) => {
+                for (editor, text) in editors.iter().zip(saved) {
+                    editor.update(cx, |state, cx| state.set_value(text, window, cx));
+                }
+                self.list_message =
+                    "Списки сохранены. Применятся при следующем подключении.".into();
+            }
+            Err(error) => self.list_message = format!("Не сохранено: {error:#}"),
+        }
     }
 }
 
-/// Строка с подписью и тумблером справа. Возвращает true при переключении.
-fn switch_row(ui: &mut egui::Ui, title: &str, hint: &str, value: &mut bool) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(RichText::new(title).size(16.0));
-            ui.label(RichText::new(hint).size(14.0).color(MUTED));
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (rect, response) =
-                ui.allocate_exact_size(egui::vec2(46.0, 26.0), egui::Sense::click());
-            if response.clicked() {
-                *value = !*value;
-                changed = true;
-            }
-            let fill = if *value { accent() } else { SURFACE_HOVER };
-            ui.painter().rect(
-                rect,
-                13.0,
-                fill,
-                egui::Stroke::new(1.0, if *value { accent() } else { border() }),
-                egui::StrokeKind::Inside,
-            );
-            let knob_x = if *value {
-                rect.right() - 13.0
-            } else {
-                rect.left() + 13.0
-            };
-            ui.painter().circle_filled(
-                egui::pos2(knob_x, rect.center().y),
-                9.0,
-                if *value { ON_ACCENT } else { MUTED },
-            );
-            response.widget_info(|| {
-                egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, *value, title)
-            });
-        });
-    });
-    changed
+// ---------- элементы ----------
+
+fn text(value: impl Into<SharedString>, size: f32, color: u32) -> Div {
+    div()
+        .text_size(px(size))
+        .text_color(c(color))
+        .child(value.into())
 }
 
-/// Цвет маркера и текст строки списка: название профиля + итог подбора.
-fn mark(result: Option<&Option<u64>>, name: &str) -> (Color32, egui::text::LayoutJob) {
-    let (color, note) = match result {
-        Some(Some(ms)) => (OK, format!("  ·  {ms} мс")),
-        Some(None) => (ERROR, "  ·  не прошёл".to_owned()),
-        None => (BORDER, String::new()),
+fn card() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .p(px(18.))
+        .rounded(px(14.))
+        .bg(c(SURFACE))
+        .border_1()
+        .border_color(c(BORDER))
+}
+
+fn dot(color: Hsla, size: f32) -> Div {
+    div().size(px(size)).rounded_full().bg(color).flex_none()
+}
+
+/// Обычная кнопка: `primary` — с акцентной заливкой.
+fn button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    primary: bool,
+    enabled: bool,
+    accent: Hsla,
+) -> Stateful<Div> {
+    let base = div()
+        .id(id.into())
+        .flex()
+        .items_center()
+        .justify_center()
+        .px(px(16.))
+        .h(px(36.))
+        .rounded(px(9.))
+        .text_size(px(14.))
+        .border_1()
+        .child(label.into());
+    let base = if primary {
+        base.bg(accent)
+            .border_color(accent)
+            .text_color(c(ON_ACCENT))
+    } else {
+        base.bg(c(SURFACE_HOVER))
+            .border_color(c(BORDER))
+            .text_color(c(TEXT))
     };
-    let font = egui::FontId::proportional(16.0);
-    let mut job = egui::text::LayoutJob::default();
-    job.append(name, 0.0, egui::TextFormat::simple(font.clone(), TEXT));
-    job.append(&note, 0.0, egui::TextFormat::simple(font, color));
-    (color, job)
+    if enabled {
+        base.cursor_pointer().hover(move |s| {
+            if primary {
+                s.bg(c(ACCENT_HOVER))
+            } else {
+                s.border_color(accent)
+            }
+        })
+    } else {
+        base.opacity(0.45)
+    }
+}
+
+fn toggle(id: impl Into<ElementId>, on: bool, enabled: bool, accent: Hsla) -> Stateful<Div> {
+    let track = div()
+        .id(id.into())
+        .w(px(46.))
+        .h(px(26.))
+        .flex_none()
+        .rounded_full()
+        .border_1()
+        .flex()
+        .items_center()
+        .px(px(3.))
+        .bg(if on { accent } else { c(SURFACE_HOVER) })
+        .border_color(if on { accent } else { c(BORDER) })
+        .child(dot(if on { c(ON_ACCENT) } else { c(MUTED) }, 18.));
+    let track = if on {
+        track.justify_end()
+    } else {
+        track.justify_start()
+    };
+    if enabled {
+        track.cursor_pointer()
+    } else {
+        track.opacity(0.45)
+    }
+}
+
+fn progress_bar(fraction: f32, height: f32, color: Hsla) -> Div {
+    div()
+        .w_full()
+        .h(px(height))
+        .rounded_full()
+        .bg(c(SURFACE_HOVER))
+        .child(
+            div()
+                .h_full()
+                .rounded_full()
+                .bg(color)
+                .w(relative(fraction.clamp(0.0, 1.0))),
+        )
+}
+
+fn section_title(title: &str, hint: &str) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(text(title.to_owned(), 22., TEXT).font_weight(FontWeight::SEMIBOLD))
+        .child(text(hint.to_owned(), 14., MUTED))
+}
+
+// ---------- страницы ----------
+
+impl Main {
+    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let accent = self.accent();
+        let mut nav = div().flex().flex_col().gap_1();
+        for (page, title, icon) in PAGES {
+            let active = self.page == page;
+            nav = nav.child(
+                div()
+                    .id(SharedString::from(format!("nav-{title}")))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px(px(12.))
+                    .h(px(40.))
+                    .rounded(px(9.))
+                    .cursor_pointer()
+                    .text_size(px(15.))
+                    .when(active, |s| s.bg(c(SURFACE_HOVER)).text_color(c(TEXT)))
+                    .when(!active, |s| {
+                        s.text_color(c(MUTED))
+                            .hover(|s| s.bg(c(SURFACE)).text_color(c(TEXT)))
+                    })
+                    .child(
+                        div()
+                            .w(px(16.))
+                            .text_color(if active { accent } else { c(MUTED) })
+                            .child(icon),
+                    )
+                    .child(title)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.page = page;
+                        cx.notify();
+                    })),
+            );
+        }
+        let update_badge = self.pending_update.as_ref().map(|release| {
+            let release = release.clone();
+            div()
+                .id("update-badge")
+                .flex()
+                .flex_col()
+                .gap_1()
+                .p(px(12.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(accent)
+                .cursor_pointer()
+                .child(text(format!("Доступна {}", release.tag), 14., TEXT))
+                .child(text("Нажмите, чтобы обновить", 12., MUTED))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.modal = Some(Modal::Update(release.clone()));
+                    cx.notify();
+                }))
+        });
+        div()
+            .flex()
+            .flex_col()
+            .justify_between()
+            .w(px(230.))
+            .flex_none()
+            .h_full()
+            .p(px(16.))
+            .bg(if self.settings.renat {
+                hsla(0., 0., 0.05, 0.55)
+            } else {
+                c(SIDEBAR)
+            })
+            .border_r_1()
+            .border_color(c(BORDER))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .px(px(6.))
+                            .pt(px(6.))
+                            .child(dot(self.state_color(), 12.))
+                            .child(text("WARP Unblock", 18., TEXT).font_weight(FontWeight::BOLD)),
+                    )
+                    .child(nav),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .children(update_badge)
+                    .child(text(format!("Версия {}", update::VERSION), 12., MUTED).px(px(6.))),
+            )
+    }
+
+    fn connect_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.preview {
+            return text(
+                "Предпросмотр интерфейса · подключение недоступно",
+                14.,
+                MUTED,
+            )
+            .into_any_element();
+        }
+        if self.locked() || self.install_after_stop.is_some() {
+            return text("Завершите текущую операцию…", 14., MUTED).into_any_element();
+        }
+        let active = self.running || self.busy;
+        let label = match (self.settings.renat, self.stopping, self.running, self.busy) {
+            (_, true, _, _) => "Отключаю…",
+            (true, _, true, _) => "Перестать моггать",
+            (true, _, _, true) => "Отменить",
+            (true, _, _, _) => "Моггать",
+            (false, _, true, _) => "Отключить",
+            (false, _, _, true) => "Отменить",
+            _ => "Подключить",
+        };
+        let renat = self.settings.renat && !self.stopping;
+        let fill = if renat {
+            hsla(self.hue(), 0.95, 0.55, 1.0)
+        } else if active {
+            c(SURFACE_HOVER)
+        } else {
+            c(ACCENT)
+        };
+        let color = if renat {
+            c(0x0f0a19)
+        } else if active {
+            c(TEXT)
+        } else {
+            c(ON_ACCENT)
+        };
+        div()
+            .id("connect")
+            .flex()
+            .items_center()
+            .justify_center()
+            .w_full()
+            .h(px(58.))
+            .rounded(px(14.))
+            .bg(fill)
+            .border_1()
+            .border_color(if active && !renat { c(BORDER) } else { fill })
+            .text_size(px(19.))
+            .font_weight(FontWeight::BOLD)
+            .text_color(color)
+            .when(!self.stopping, |s| {
+                s.cursor_pointer().hover(move |s| {
+                    if renat || active {
+                        s.opacity(0.9)
+                    } else {
+                        s.bg(c(ACCENT_HOVER))
+                    }
+                })
+            })
+            .when(self.stopping, |s| s.opacity(0.6))
+            .child(label)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.stopping {
+                    return;
+                }
+                if this.running || this.busy {
+                    this.action(Command::Stop, "Отключаю…");
+                } else {
+                    let settings = this.connect_settings(cx);
+                    this.action(Command::Start(settings), "Подключаю…");
+                }
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
+    fn home(&self, cx: &mut Context<Self>) -> Div {
+        let accent = self.accent();
+        let mut hero = card().gap_4().child(
+            div()
+                .flex()
+                .items_center()
+                .gap_4()
+                .child(dot(self.state_color(), 14.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(text(self.title(), 26., TEXT).font_weight(FontWeight::BOLD))
+                        .when(self.running && !self.busy, |s| {
+                            s.child(text(
+                                if self.checks[2].1 {
+                                    self.checks[3].0.clone()
+                                } else {
+                                    self.checks[2].0.clone()
+                                },
+                                14.,
+                                MUTED,
+                            ))
+                        })
+                        .child(text(
+                            format!("Профиль: {}", self.profile_name()),
+                            13.,
+                            MUTED,
+                        )),
+                ),
+        );
+        if self.busy {
+            if let Some((done, total, failed)) = self.batch {
+                hero = hero.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .child(text("Подбор профиля", 13., MUTED))
+                                .child(text(
+                                    if failed > 0 {
+                                        format!("проверено {done} из {total} · не прошло {failed}")
+                                    } else {
+                                        format!("проверено {done} из {total}")
+                                    },
+                                    13.,
+                                    TEXT,
+                                )),
+                        )
+                        .child(progress_bar(done as f32 / total.max(1) as f32, 10., accent)),
+                );
+            }
+            if let Some((done, total, label)) = &self.stage {
+                hero = hero.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .child(text(label.clone(), 13., MUTED))
+                                .child(text(
+                                    format!("этап {} из {total}", (done + 1).min(*total)),
+                                    13.,
+                                    MUTED,
+                                )),
+                        )
+                        .child(progress_bar(
+                            *done as f32 / (*total).max(1) as f32,
+                            6.,
+                            accent,
+                        )),
+                );
+            }
+        }
+        hero = hero.child(self.connect_button(cx));
+
+        let titles = ["Компоненты", "Профиль", "Тоннель", "Нейросети"];
+        let mut tiles = div().flex().gap_3();
+        for (index, title) in titles.iter().enumerate() {
+            let (value, ok) = &self.checks[index];
+            tiles = tiles.child(
+                card()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_2()
+                    .p(px(14.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(dot(if *ok { c(OK) } else { c(BORDER) }, 8.))
+                            .child(text(*title, 13., MUTED)),
+                    )
+                    .child(text(value.clone(), 14., if *ok { TEXT } else { MUTED })),
+            );
+        }
+        let health = match (self.running, self.last_health) {
+            (true, Some(last)) => format!(
+                "Проверено {} с назад · обновляется автоматически",
+                last.elapsed().as_secs()
+            ),
+            _ => String::new(),
+        };
+
+        let can_check = self.running && !self.busy && !self.locked() && self.services_rx.is_none();
+        let mut services = card().child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            text("Проверка сервисов", 16., TEXT).font_weight(FontWeight::SEMIBOLD),
+                        )
+                        .child(text(
+                            "HTTPS через WARP. Голос и видео проверяйте отдельно.",
+                            13.,
+                            MUTED,
+                        )),
+                )
+                .child(
+                    button("services", "Проверить", false, can_check, accent).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            if !can_check {
+                                return;
+                            }
+                            this.services.clear();
+                            let (tx, rx) = mpsc::channel();
+                            this.services_rx = Some(rx);
+                            std::thread::spawn(move || {
+                                let _ = tx.send(features::check_services());
+                            });
+                            cx.notify();
+                        }),
+                    ),
+                ),
+        );
+        if self.services_rx.is_some() {
+            services = services.child(text("Проверяю сервисы через WARP…", 14., MUTED));
+        }
+        if !self.services.is_empty() {
+            let mut row = div().flex().gap_3();
+            for service in &self.services {
+                row = row.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .p(px(10.))
+                        .rounded(px(10.))
+                        .bg(c(SURFACE_HOVER))
+                        .child(dot(if service.ok { c(OK) } else { c(ERROR) }, 8.))
+                        .child(text(service.name, 14., TEXT))
+                        .child(
+                            text(service.detail.clone(), 13., MUTED)
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap(),
+                        ),
+                );
+            }
+            services = services.child(row);
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(hero)
+            .child(tiles)
+            .when(!health.is_empty(), |s| s.child(text(health, 13., MUTED)))
+            .child(services)
+    }
+
+    fn profile_name(&self) -> String {
+        if self.settings.custom {
+            "свои аргументы winws".into()
+        } else {
+            self.catalog[self.settings.strategy]
+                .name
+                .replace("WARP · ", "")
+        }
+    }
+
+    fn profiles(&self, cx: &mut Context<Self>) -> Div {
+        let accent = self.accent();
+        let enabled = !self.preview && !self.busy && !self.running && !self.locked();
+        let mut list = div().flex().flex_col().gap_1();
+        let rows = self
+            .catalog
+            .iter()
+            .map(|p| (p.name.clone(), false))
+            .chain([("Свои аргументы winws".to_owned(), true)]);
+        for (index, (name, custom)) in rows.enumerate() {
+            let selected = if custom {
+                self.settings.custom
+            } else {
+                !self.settings.custom && self.settings.strategy == index
+            };
+            let (mark, note) = match (custom, self.results.get(&index)) {
+                (true, _) => (c(BORDER), String::new()),
+                (_, Some(Some(ms))) => (c(OK), format!("{ms} мс")),
+                (_, Some(None)) => (c(ERROR), "не прошёл".into()),
+                _ => (c(BORDER), String::new()),
+            };
+            let stat = if custom {
+                None
+            } else {
+                features::stats(&self.root).get(&index).cloned()
+            };
+            list = list.child(
+                div()
+                    .id(("profile", index))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px(px(12.))
+                    .h(px(40.))
+                    .rounded(px(9.))
+                    .border_1()
+                    .border_color(if selected {
+                        accent
+                    } else {
+                        transparent_black()
+                    })
+                    .when(selected, |s| s.bg(c(SURFACE_HOVER)))
+                    .when(enabled, |s| {
+                        s.cursor_pointer().hover(|s| s.bg(c(SURFACE_HOVER)))
+                    })
+                    .child(dot(mark, 9.))
+                    .child(text(name, 14., TEXT).flex_1().min_w_0())
+                    .when_some(stat, |s, stat| {
+                        s.child(text(
+                            format!(
+                                "{}/{} · {} мс",
+                                stat.successes,
+                                stat.attempts,
+                                stat.total_ms / stat.successes.max(1)
+                            ),
+                            12.,
+                            MUTED,
+                        ))
+                    })
+                    .child(text(note, 13., if mark == c(ERROR) { ERROR } else { OK }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !enabled {
+                            return;
+                        }
+                        if custom {
+                            this.settings.custom = true;
+                        } else {
+                            this.settings.custom = false;
+                            this.settings.strategy = index;
+                        }
+                        this.save_settings();
+                        cx.notify();
+                    })),
+            );
+        }
+        let actions = div()
+            .flex()
+            .flex_wrap()
+            .gap_2()
+            .child(
+                button("test", "Тест профиля", false, enabled, accent).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        if enabled {
+                            let s = this.connect_settings(cx);
+                            this.action(Command::Test(s), "Проверяю профиль…");
+                            this.page = Page::Home;
+                        }
+                    },
+                )),
+            )
+            .child(
+                button("best", "Выбрать лучший", false, enabled, accent).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        if enabled {
+                            let s = this.connect_settings(cx);
+                            this.action(Command::Best(s), "Сравниваю все профили…");
+                            this.page = Page::Home;
+                        }
+                    },
+                )),
+            )
+            .child(
+                button("auto", "Подобрать автоматически", true, enabled, accent).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        if enabled {
+                            let s = this.connect_settings(cx);
+                            this.action(Command::Auto(s), "Подбираю профиль WARP…");
+                            this.page = Page::Home;
+                        }
+                    }),
+                ),
+            );
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(section_title(
+                "Профили WARP",
+                "Как WireGuard доезжает до WARP: порт, эндпоинт, мусорные пакеты. Проверка идёт без TUN — перед тестом отключите другой VPN.",
+            ))
+            .child(card().child(actions).when(!enabled && !self.preview, |s| {
+                s.child(text("Менять профиль можно при отключённом соединении.", 13., MUTED))
+            }))
+            .child(card().gap_1().p(px(8.)).child(list));
+        if self.settings.custom {
+            body = body.child(
+                card().child(text("Аргументы winws", 15., TEXT)).child(
+                    Textarea::new(&self.custom_args)
+                        .h(px(90.))
+                        .disabled(!enabled),
+                ),
+            );
+        }
+        body
+    }
+
+    fn lists_page(&self, cx: &mut Context<Self>) -> Div {
+        let accent = self.accent();
+        let locked = self.busy || self.running || self.locked();
+        let mut tabs = div().flex().gap_2();
+        for (index, title) in features::LIST_TITLES.iter().enumerate() {
+            let active = self.list_tab == index;
+            tabs = tabs.child(
+                div()
+                    .id(("list-tab", index))
+                    .px(px(14.))
+                    .h(px(34.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(9.))
+                    .cursor_pointer()
+                    .text_size(px(14.))
+                    .border_1()
+                    .when(active, |s| {
+                        s.bg(c(SURFACE_HOVER))
+                            .border_color(accent)
+                            .text_color(c(TEXT))
+                    })
+                    .when(!active, |s| s.border_color(c(BORDER)).text_color(c(MUTED)))
+                    .child(*title)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.list_tab = index;
+                        cx.notify();
+                    })),
+            );
+        }
+        let editor = match &self.lists {
+            Some(editors) => {
+                let lines = editors[self.list_tab].read(cx).value().lines().count();
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div().flex_1().min_h(px(260.)).child(
+                            Textarea::new(&editors[self.list_tab])
+                                .h_full()
+                                .disabled(locked),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                button("save-lists", "Сохранить все списки", true, !locked, accent)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        if !locked {
+                                            this.save_lists(window, cx);
+                                            cx.notify();
+                                        }
+                                    })),
+                            )
+                            .child(text(format!("Строк: {lines}"), 13., MUTED)),
+                    )
+            }
+            None => div().child(text("Загружаю списки…", 14., MUTED)),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .size_full()
+            .child(section_title(
+                "Списки доменов",
+                "Один домен на строку, +.example.com включает поддомены. «Напрямую» главнее правил обхода.",
+            ))
+            .child(
+                card()
+                    .flex_1()
+                    .min_h_0()
+                    .child(tabs)
+                    .when(locked, |s| {
+                        s.child(text(
+                            "Для сохранения отключите соединение и дождитесь завершения операции.",
+                            13.,
+                            WARN,
+                        ))
+                    })
+                    .child(editor)
+                    .when(!self.list_message.is_empty(), |s| {
+                        s.child(text(self.list_message.clone(), 13., MUTED))
+                    }),
+            )
+    }
+
+    fn switch_row(
+        &self,
+        id: &'static str,
+        title: &str,
+        hint: &str,
+        on: bool,
+        cx: &mut Context<Self>,
+        apply: fn(&mut Main, bool),
+    ) -> impl IntoElement {
+        // В предпросмотре нельзя трогать систему (задачу планировщика автозапуска).
+        let enabled = !self.locked() && !(self.preview && id == "autostart");
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_4()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(text(title.to_owned(), 15., TEXT))
+                    .child(text(hint.to_owned(), 13., MUTED)),
+            )
+            .child(toggle(id, on, enabled, self.accent()).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    if enabled {
+                        apply(this, !on);
+                        cx.notify();
+                    }
+                },
+            )))
+    }
+
+    fn settings_page(&self, cx: &mut Context<Self>) -> Div {
+        let accent = self.accent();
+        let files_locked = self.busy || self.running || self.locked();
+        let general = card()
+            .gap_4()
+            .child(text("Общие", 16., TEXT).font_weight(FontWeight::SEMIBOLD))
+            .child(self.switch_row(
+                "autostart",
+                "Запускать вместе с Windows",
+                "Тихо, в трее, с автоподключением",
+                self.settings.autostart,
+                cx,
+                |this, value| match platform::set_autostart(value, &this.root) {
+                    Ok(()) => {
+                        this.settings.autostart = value;
+                        this.save_settings();
+                    }
+                    Err(error) => this.log(format!("Автозапуск не изменён: {error:#}")),
+                },
+            ))
+            .child(self.switch_row(
+                "tray",
+                "Крестик сворачивает в трей",
+                "Выключено — крестик закрывает приложение",
+                self.settings.close_to_tray,
+                cx,
+                |this, value| {
+                    this.settings.close_to_tray = value;
+                    this.save_settings();
+                },
+            ))
+            .child(self.switch_row(
+                "renat",
+                "Ренат мод",
+                "Радужная кнопка, фон зависит от подключения. Свои картинки: data/renat-on.png и renat-off.png",
+                self.settings.renat,
+                cx,
+                |this, value| {
+                    this.settings.renat = value;
+                    this.save_settings();
+                },
+            ));
+
+        let checking = self.update_rx.is_some();
+        let updates = card()
+            .gap_4()
+            .child(text("Обновления", 16., TEXT).font_weight(FontWeight::SEMIBOLD))
+            .child(self.switch_row(
+                "check-updates",
+                "Проверять при запуске",
+                "Если вышла новая версия, появится окно с предложением установить",
+                self.settings.check_updates,
+                cx,
+                |this, value| {
+                    this.settings.check_updates = value;
+                    this.save_settings();
+                },
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        button("check", "Проверить сейчас", false, !checking, accent).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                if !checking {
+                                    this.check_updates(true);
+                                    cx.notify();
+                                }
+                            }),
+                        ),
+                    )
+                    .when_some(self.pending_update.clone(), |s, release| {
+                        s.child(
+                            button(
+                                "install",
+                                format!("Установить {}", release.tag),
+                                true,
+                                !checking,
+                                accent,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.modal = Some(Modal::Update(release.clone()));
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                    })
+                    .child(
+                        button("releases", "Релизы на GitHub", false, true, accent).on_click(
+                            |_, _, _| {
+                                let _ = open_url("https://github.com/kwlnd/warp-unblock/releases");
+                            },
+                        ),
+                    ),
+            )
+            .child(text(
+                if self.update_message.is_empty() {
+                    format!("Установлена версия {}", update::VERSION)
+                } else {
+                    self.update_message.clone()
+                },
+                13.,
+                MUTED,
+            ));
+
+        let backup = card()
+            .gap_4()
+            .child(text("Резервная копия и телефон", 16., TEXT).font_weight(FontWeight::SEMIBOLD))
+            .child(text(
+                "Копия и QR содержат приватный ключ WARP — не публикуйте их.",
+                13.,
+                MUTED,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        button(
+                            "export",
+                            "Экспорт настроек и аккаунта",
+                            false,
+                            !files_locked,
+                            accent,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !files_locked {
+                                let root = this.root.clone();
+                                let settings = this.connect_settings(cx);
+                                this.task(move || features::export_backup(&root, settings));
+                            }
+                        })),
+                    )
+                    .child(
+                        button("import", "Импорт копии", false, !files_locked, accent).on_click(
+                            cx.listener(move |this, _, _, _| {
+                                if !files_locked {
+                                    let root = this.root.clone();
+                                    this.task(move || features::import_backup(&root));
+                                }
+                            }),
+                        ),
+                    )
+                    .child(
+                        button("qr", "QR для телефона", false, !files_locked, accent).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                if files_locked {
+                                    return;
+                                }
+                                match features::qr(&this.root) {
+                                    Ok(code) => this.modal = Some(Modal::Qr(code)),
+                                    Err(e) => this.task_message = format!("Ошибка: {e:#}"),
+                                }
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+            )
+            .when(!self.task_message.is_empty(), |s| {
+                s.child(text(self.task_message.clone(), 13., MUTED))
+            });
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(section_title(
+                "Настройки",
+                "Поведение приложения, обновления и перенос аккаунта.",
+            ))
+            .child(general)
+            .child(updates)
+            .child(backup)
+    }
+
+    fn journal_page(&self, cx: &mut Context<Self>) -> Div {
+        let accent = self.accent();
+        let root = self.root.clone();
+        let readme = self.root.join("README.md");
+        let mut events = div().flex().flex_col().gap_1();
+        if self.journal.is_empty() {
+            events = events.child(text("Событий пока нет", 14., MUTED));
+        }
+        for line in self.journal.iter().rev().take(200) {
+            events = events.child(text(line.clone(), 13., MUTED));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(section_title(
+                "Журнал",
+                "Логи могут содержать домены и IP. Ключи из папки data/ публиковать нельзя.",
+            ))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        button("logs", "Открыть папку логов", false, true, accent).on_click(
+                            move |_, _, _| {
+                                let path = root.join("data/logs");
+                                let _ = fs::create_dir_all(&path);
+                                platform::open(&path);
+                            },
+                        ),
+                    )
+                    .child(
+                        button("readme", "Инструкция", false, true, accent)
+                            .on_click(move |_, _, _| platform::open(&readme)),
+                    )
+                    .child(
+                        button("to-lists", "Списки доменов", false, true, accent).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.page = Page::Lists;
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+            )
+            .child(
+                card()
+                    .child(text("События (новые сверху)", 15., TEXT))
+                    .child(events),
+            )
+            .when(!self.engine_log.is_empty(), |s| {
+                s.child(
+                    card().child(text("Подробный лог mihomo", 15., TEXT)).child(
+                        div()
+                            .font_family("Consolas")
+                            .text_size(px(12.))
+                            .text_color(c(MUTED))
+                            .child(self.engine_log.clone()),
+                    ),
+                )
+            })
+    }
+
+    // ---------- модальные окна ----------
+
+    fn modal(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let accent = self.accent();
+        let modal = self.modal.as_ref()?;
+        let body = match modal {
+            Modal::Close => card()
+                .w(px(420.))
+                .child(text("Закрыть приложение?", 20., TEXT).font_weight(FontWeight::BOLD))
+                .child(text("Подключение будет остановлено.", 14., MUTED))
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(button("stay", "Остаться", false, true, accent).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.modal = None;
+                                cx.notify();
+                            }),
+                        ))
+                        .child(
+                            button("close", "Остановить и закрыть", true, true, accent)
+                                .on_click(cx.listener(|this, _, _, cx| this.quit(cx))),
+                        ),
+                ),
+            Modal::Update(release) => {
+                let notes = if release.notes.is_empty() {
+                    "Описание изменений не указано.".to_owned()
+                } else {
+                    plain_notes(&release.notes)
+                };
+                let mb = release.zip.size as f64 / 1048576.0;
+                let install = release.clone();
+                let skip = release.tag.clone();
+                let page = release.page.clone();
+                card()
+                    .w(px(560.))
+                    .max_h(px(560.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(dot(accent, 10.))
+                            .child(
+                                text(format!("Доступна версия {}", release.tag), 20., TEXT)
+                                    .font_weight(FontWeight::BOLD),
+                            ),
+                    )
+                    .child(text(
+                        format!(
+                            "У вас {}. Архив {:.1} МБ, проверяется по SHA-256. Ваши настройки, аккаунт и списки доменов сохранятся.",
+                            update::VERSION,
+                            mb
+                        ),
+                        13.,
+                        MUTED,
+                    ))
+                    .child(
+                        div()
+                            .id("notes")
+                            .flex_1()
+                            .min_h(px(80.))
+                            .max_h(px(300.))
+                            .overflow_y_scroll()
+                            .p(px(12.))
+                            .rounded(px(10.))
+                            .bg(c(BACKGROUND))
+                            .text_size(px(13.))
+                            .text_color(c(TEXT))
+                            .child(notes),
+                    )
+                    .when(self.running || self.busy, |s| {
+                        s.child(text(
+                            "Соединение будет отключено на время установки, затем программа перезапустится.",
+                            13.,
+                            WARN,
+                        ))
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .justify_end()
+                            .gap_2()
+                            .child(button("skip", "Пропустить версию", false, true, accent).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    this.settings.skip_version = skip.clone();
+                                    this.save_settings();
+                                    this.modal = None;
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(button("page", "Что нового", false, true, accent).on_click(
+                                move |_, _, _| {
+                                    let _ = open_url(&page);
+                                },
+                            ))
+                            .child(button("later", "Позже", false, true, accent).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.modal = None;
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(
+                                button("update-now", "Обновить", true, !self.preview, accent)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if !this.preview {
+                                            this.begin_install(install.clone());
+                                            cx.notify();
+                                        }
+                                    })),
+                            ),
+                    )
+            }
+            Modal::Installing(label, fraction) => card()
+                .w(px(440.))
+                .child(text("Обновление", 20., TEXT).font_weight(FontWeight::BOLD))
+                .child(text(label.clone(), 14., MUTED))
+                .child(progress_bar(*fraction, 10., accent))
+                .child(text(
+                    "Не закрывайте программу — она перезапустится сама.",
+                    13.,
+                    MUTED,
+                )),
+            Modal::Qr(code) => {
+                let n = code.width();
+                let cell = (320.0 / (n + 8) as f32).floor().max(2.0);
+                let mut grid = div()
+                    .flex()
+                    .flex_col()
+                    .p(px(cell * 4.))
+                    .bg(gpui_kit::white());
+                for y in 0..n {
+                    let mut row = div().flex();
+                    for x in 0..n {
+                        let dark = code[(x, y)] == qrcode::Color::Dark;
+                        row =
+                            row.child(div().size(px(cell)).when(dark, |s| s.bg(gpui_kit::black())));
+                    }
+                    grid = grid.child(row);
+                }
+                card()
+                    .items_center()
+                    .child(
+                        text("Профиль WARP для телефона", 20., TEXT).font_weight(FontWeight::BOLD),
+                    )
+                    .child(text(
+                        "Содержит приватный ключ. Импортируйте в приложении Android: Профили → QR.",
+                        13.,
+                        MUTED,
+                    ))
+                    .child(grid)
+                    .child(button("qr-close", "Закрыть", false, true, accent).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.modal = None;
+                            cx.notify();
+                        }),
+                    ))
+            }
+        };
+        Some(
+            div()
+                .id("modal-backdrop")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(hsla(0., 0., 0., 0.6))
+                .occlude()
+                .child(body.shadow_lg())
+                .into_any_element(),
+        )
+    }
+
+    fn backdrop(&self) -> Option<AnyElement> {
+        if !self.settings.renat {
+            return None;
+        }
+        let candidates: &[&str] = if self.running { &RENAT_ON } else { &RENAT_OFF };
+        let path = candidates
+            .iter()
+            .map(|name| self.root.join(name))
+            .find(|path| path.is_file())?;
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .child(
+                    img(path)
+                        .size_full()
+                        .object_fit(ObjectFit::Cover)
+                        .opacity(0.7),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
+impl Render for Main {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let page = match self.page {
+            Page::Home => self.home(cx),
+            Page::Profiles => self.profiles(cx),
+            Page::Lists => self.lists_page(cx),
+            Page::Settings => self.settings_page(cx),
+            Page::Journal => self.journal_page(cx),
+        };
+        let content = if self.page == Page::Lists {
+            div().flex_1().min_w_0().h_full().p(px(28.)).child(page)
+        } else {
+            div().flex_1().min_w_0().h_full().child(
+                div()
+                    .id("page-scroll")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .p(px(28.))
+                    .child(page),
+            )
+        };
+        let modal = self.modal(cx);
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .font_family(FONT)
+            .text_color(c(TEXT))
+            .bg(c(BACKGROUND))
+            .children(self.backdrop())
+            .child(self.sidebar(cx))
+            .child(content)
+            .children(modal)
+    }
+}
+
+/// Markdown релиза в простой текст: без решёток заголовков и звёздочек выделения.
+fn plain_notes(markdown: &str) -> String {
+    markdown
+        .lines()
+        .map(|line| {
+            line.trim_start_matches('#')
+                .trim_start()
+                .replace("**", "")
+                .replace('`', "")
+        })
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        )
+}
+
+fn open_url(url: &str) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("explorer.exe")
+        .arg(url)
+        .creation_flags(0x0800_0000)
+        .spawn()
+        .map(|_| ())
 }
 
 fn load_results(root: &Path) -> HashMap<usize, Option<u64>> {
@@ -913,96 +1898,6 @@ fn load_results(root: &Path) -> HashMap<usize, Option<u64>> {
             Some((index, item["delay_ms"].as_u64()))
         })
         .collect()
-}
-
-fn hsv(hue: f32, saturation: f32, value: f32) -> Color32 {
-    let c = egui::ecolor::Hsva::new(hue.rem_euclid(1.0), saturation, value, 1.0);
-    Color32::from(c)
-}
-
-/// Кнопка целиком мигает всеми цветами RGB (без градиента). Возвращает true по клику.
-fn rainbow_button(ui: &mut egui::Ui, label: &str) -> bool {
-    let size = egui::vec2(ui.available_width(), 56.0);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let value = if response.hovered() { 1.0 } else { 0.92 };
-    let fill = hsv(hue(), 0.95, value);
-    ui.painter().rect(
-        rect,
-        12.0,
-        fill,
-        egui::Stroke::new(2.0, Color32::from_white_alpha(120)),
-        egui::StrokeKind::Inside,
-    );
-    let font = egui::FontId::proportional(20.0);
-    ui.painter().text(
-        rect.center() + egui::vec2(0.0, 1.0),
-        egui::Align2::CENTER_CENTER,
-        label,
-        font.clone(),
-        Color32::from_white_alpha(110),
-    );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        font,
-        Color32::from_rgb(15, 10, 25),
-    );
-    response.clicked()
-}
-
-fn load_renat(
-    ctx: &egui::Context,
-    root: &Path,
-    name: &str,
-    candidates: &[&str],
-) -> Option<egui::TextureHandle> {
-    let path = candidates
-        .iter()
-        .map(|name| root.join(name))
-        .find(|path| path.is_file())?;
-    let image = image::open(path).ok()?.to_rgba8();
-    let size = [image.width() as usize, image.height() as usize];
-    let color = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
-    Some(ctx.load_texture(name, color, egui::TextureOptions::LINEAR))
-}
-
-/// Тёмная подложка и картинка по центру окна (режим cover) под всеми панелями.
-fn paint_backdrop(ctx: &egui::Context, texture: Option<&egui::TextureHandle>) {
-    let painter = ctx.layer_painter(egui::LayerId::background());
-    let screen = ctx.content_rect();
-    painter.rect_filled(screen, 0.0, BACKGROUND);
-    let Some(texture) = texture else { return };
-    let tex = texture.size_vec2();
-    let scale = (screen.width() / tex.x).max(screen.height() / tex.y);
-    let shown = tex * scale;
-    // Портрет в широком окне режется по высоте: прижимаем кадр вверх, чтобы лицо оставалось видно.
-    let excess = (shown.y - screen.height()).max(0.0);
-    let rect = egui::Rect::from_min_size(
-        egui::pos2(
-            screen.center().x - shown.x / 2.0,
-            screen.top() - excess * 0.3,
-        ),
-        shown,
-    );
-    painter.with_clip_rect(screen).image(
-        texture.id(),
-        rect,
-        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-        Color32::from_white_alpha(175),
-    );
-}
-
-fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::new()
-        .fill(surface())
-        .stroke(egui::Stroke::new(1.0, border()))
-        .corner_radius(12.0)
-        .inner_margin(egui::Margin::symmetric(14, 10))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add(ui);
-        });
 }
 
 fn tail(path: &Path) -> String {

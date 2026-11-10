@@ -7,6 +7,7 @@ mod platform;
 mod strategies;
 mod tray;
 mod ui;
+mod update;
 
 fn main() {
     if let Err(error) = run() {
@@ -29,35 +30,35 @@ fn run() -> anyhow::Result<()> {
     }
     let tray_start = std::env::args().any(|arg| arg == "--tray");
     let preview = std::env::args().any(|arg| arg == "--preview");
+    let after_update = std::env::args().any(|arg| arg == "--after-update");
     let _instance = if preview {
         None
     } else {
-        Some(match platform::Instance::acquire() {
-            Ok(instance) => instance,
+        Some(acquire_instance(after_update)?)
+    };
+    if !preview {
+        update::cleanup(&root);
+    }
+    ui::run(root, tray_start, preview);
+    Ok(())
+}
+
+fn acquire_instance(after_update: bool) -> anyhow::Result<platform::Instance> {
+    // После обновления старый экземпляр ещё закрывается: ждём, пока он отпустит mutex.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        match platform::Instance::acquire() {
+            Ok(instance) => return Ok(instance),
+            Err(_) if after_update && std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
             Err(_) => {
                 // Уже запущено (возможно, в трее): просто показываем существующее окно.
                 if platform::show_main_window(true) {
-                    return Ok(());
+                    std::process::exit(0);
                 }
                 anyhow::bail!("WARP Unblock уже запущен");
             }
-        })
-    };
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([960.0, 760.0])
-            .with_min_inner_size([680.0, 520.0])
-            .with_visible(!tray_start)
-            .with_resizable(true)
-            .with_maximize_button(true)
-            .with_icon(eframe::egui::IconData::default()),
-        centered: true,
-        ..Default::default()
-    };
-    eframe::run_native(
-        "WARP Unblock",
-        options,
-        Box::new(move |cc| Ok(Box::new(ui::App::new(cc, root, tray_start, preview)))),
-    )
-    .map_err(|error| anyhow::anyhow!(error.to_string()))
+        }
+    }
 }

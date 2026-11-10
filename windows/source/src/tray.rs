@@ -1,10 +1,9 @@
 //! Иконка в трее: левый клик — открыть окно, правый — меню. Обработчики работают на потоке
-//! событий Windows и не зависят от кадров egui, поэтому живут и при скрытом окне.
+//! событий Windows и не зависят от отрисовки окна, поэтому живут и при скрытом окне.
 use crate::{
     engine::{Command, Handle, Settings},
     platform,
 };
-use eframe::egui;
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
@@ -57,7 +56,7 @@ fn render(look: Look) -> Icon {
 }
 
 impl Tray {
-    pub fn new(ctx: egui::Context, handle: Handle, root: PathBuf) -> Option<Self> {
+    pub fn new(handle: Handle, root: PathBuf) -> Option<Self> {
         let open = MenuItem::new("Открыть", true, None);
         let connect = MenuItem::new("Подключить", true, None);
         let disconnect = MenuItem::new("Отключить", true, None);
@@ -108,11 +107,8 @@ impl Tray {
             } else if event.id == disconnect {
                 handle.send(Command::Stop);
             } else if event.id == quit {
+                // Выход подхватывает таймер интерфейса: он останавливает соединение и закрывает окно.
                 QUIT.store(true, Ordering::Relaxed);
-                // Закрытие обрабатывается кадром, поэтому окно показываем.
-                platform::show_main_window(true);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                ctx.request_repaint();
             }
         }));
         Some(Self {

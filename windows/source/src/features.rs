@@ -1,16 +1,11 @@
 use crate::engine::Settings;
 use anyhow::{bail, Context, Result};
-use eframe::egui::{self, Color32};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fs, path::Path, sync::mpsc, time::Duration};
+use std::{collections::BTreeMap, fs, path::Path, time::Duration};
 
 const LISTS: [&str; 3] = ["proxy-domains.txt", "direct-domains.txt", "ai-domains.txt"];
 const ACCOUNT: [&str; 3] = ["wgcf-account.toml", "wgcf-profile.conf", "reserved.txt"];
 pub static FILES_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-pub const VERSION: &str = match option_env!("WARP_VERSION") {
-    Some(v) => v,
-    None => env!("CARGO_PKG_VERSION"),
-};
 
 /// Portable domain-list v1: ASCII DNS names, optional +./*. suffix wildcard, # comments.
 pub fn domains(text: &str) -> Result<String> {
@@ -91,58 +86,6 @@ pub fn best(root: &Path, candidates: &[(usize, u64)]) -> Option<usize> {
                 .then(ams.cmp(bms))
         })
         .map(|v| v.0)
-}
-
-fn version(tag: &str) -> Option<[u64; 3]> {
-    let p: Vec<_> = tag.strip_prefix('v').unwrap_or(tag).split('.').collect();
-    if p.len() != 3 {
-        return None;
-    }
-    Some([p[0].parse().ok()?, p[1].parse().ok()?, p[2].parse().ok()?])
-}
-fn update() -> Result<String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .user_agent("warp-unblock")
-        .build()?;
-    let mut latest = None;
-    for page in 1..=10 {
-        let items: Vec<serde_json::Value> = client
-            .get(format!(
-                "https://api.github.com/repos/kwlnd/warp-unblock/releases?per_page=100&page={page}"
-            ))
-            .send()?
-            .error_for_status()?
-            .json()?;
-        let done = items.len() < 100;
-        for item in items {
-            if item["draft"].as_bool() != Some(false) || item["prerelease"].as_bool() != Some(false)
-            {
-                continue;
-            }
-            let tag = item["tag_name"].as_str().unwrap_or("");
-            if tag.starts_with('v') {
-                if let Some(v) = version(tag) {
-                    latest = Some(latest.map_or(v, |old: [u64; 3]| old.max(v)));
-                }
-            }
-        }
-        if done {
-            break;
-        }
-    }
-    let latest = latest.context("Нет стабильных Windows-релизов")?;
-    Ok(
-        if latest > version(VERSION).context("Неизвестная текущая версия")?
-        {
-            format!(
-                "Доступна v{}.{}.{}. Откройте релизы для загрузки.",
-                latest[0], latest[1], latest[2]
-            )
-        } else {
-            format!("Версия {VERSION} актуальна")
-        },
-    )
 }
 
 #[derive(Serialize, Deserialize)]
@@ -356,268 +299,100 @@ fn profile(root: &Path) -> Result<String> {
     Ok(text)
 }
 
-#[derive(Default)]
-pub struct Tools {
-    lists: [String; 3],
-    loaded: bool,
-    editor_open: bool,
-    editor_list: usize,
-    message: String,
-    services: Vec<(String, bool, String)>,
-    rx: Option<mpsc::Receiver<Result<String>>>,
-    service_rx: Option<mpsc::Receiver<Vec<(String, bool, String)>>>,
-    qr: Option<qrcode::QrCode>,
-    handle: Option<std::thread::JoinHandle<()>>,
+pub const LIST_TITLES: [&str; 3] = ["Через WARP", "Напрямую", "AI через Opera"];
+
+pub fn read_lists(root: &Path) -> Result<[String; 3]> {
+    let values = LISTS
+        .iter()
+        .map(|name| {
+            Ok(fs::read_to_string(
+                root.join("app/config/lists").join(name),
+            )?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(values.try_into().unwrap())
 }
-impl Drop for Tools {
-    fn drop(&mut self) {
-        // Let an import finish or roll back before the process exits.
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
+
+/// Нормализует и сохраняет все три списка; возвращает сохранённый вид.
+pub fn save_lists(root: &Path, lists: &[String; 3]) -> Result<[String; 3]> {
+    let normalized = lists
+        .iter()
+        .zip(LIST_TITLES)
+        .map(|(text, title)| domains(text).with_context(|| format!("«{title}»")))
+        .collect::<Result<Vec<_>>>()?;
+    for (name, text) in LISTS.iter().zip(&normalized) {
+        fs::write(root.join("app/config/lists").join(name), text)?;
     }
+    Ok(normalized.try_into().unwrap())
 }
-impl Tools {
-    pub fn poll(&mut self, root: &Path) -> Option<Settings> {
-        let mut imported = false;
-        if let Some(result) = self.rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            self.message = match result {
-                Ok(v) => {
-                    imported = v.starts_with("Импортировано.");
-                    if imported {
-                        self.loaded = false;
-                    }
-                    v
-                }
-                Err(e) => format!("Ошибка: {e:#}"),
-            };
-            self.rx = None;
-            if let Some(handle) = self.handle.take() {
-                let _ = handle.join();
-            }
-        }
-        if let Some(result) = self.service_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            self.services = result;
-            self.service_rx = None;
-        }
 
-        if imported {
-            Some(Settings::load(root))
-        } else {
-            None
+/// Выполняет файловую операцию (экспорт/импорт), пока движок не трогает те же файлы.
+pub fn guarded(task: impl FnOnce() -> Result<String>) -> Result<String> {
+    struct Unlock;
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            FILES_BUSY.store(false, std::sync::atomic::Ordering::Release);
         }
     }
+    FILES_BUSY.store(true, std::sync::atomic::Ordering::Release);
+    let _unlock = Unlock;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(task))
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("Операция завершилась неожиданно")))
+}
 
-    fn task(&mut self, task: impl FnOnce() -> Result<String> + Send + 'static) {
-        let (tx, rx) = mpsc::channel();
-        self.rx = Some(rx);
-        self.message = "Выполняю…".into();
-        FILES_BUSY.store(true, std::sync::atomic::Ordering::Release);
-        self.handle = Some(std::thread::spawn(move || {
-            struct Unlock;
-            impl Drop for Unlock {
-                fn drop(&mut self) {
-                    FILES_BUSY.store(false, std::sync::atomic::Ordering::Release);
-                }
-            }
-            let _unlock = Unlock;
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(task))
-                .unwrap_or_else(|_| Err(anyhow::anyhow!("Операция завершилась неожиданно")));
-            let _ = tx.send(result);
-        }));
-    }
-    pub fn open_editor(&mut self) {
-        self.editor_open = true;
-    }
+pub fn export_backup(root: &Path, settings: Settings) -> Result<String> {
+    export(root, settings)
+}
 
-    pub fn editor_window(&mut self, ctx: &egui::Context, root: &Path, locked: bool) {
-        if !self.editor_open {
-            return;
+pub fn import_backup(root: &Path) -> Result<String> {
+    import(root)
+}
+
+/// QR с профилем WARP для импорта на телефон (содержит приватный ключ).
+pub fn qr(root: &Path) -> Result<qrcode::QrCode> {
+    Ok(qrcode::QrCode::new(profile(root)?.as_bytes())?)
+}
+
+pub struct Service {
+    pub name: &'static str,
+    pub ok: bool,
+    pub detail: String,
+}
+
+/// HTTPS-доступность сервисов через группу WARP работающего mihomo.
+pub fn check_services() -> Vec<Service> {
+    let check = |name: &'static str, url: &str| {
+        let result = (|| -> Result<u64> {
+            let client = reqwest::blocking::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(12))
+                .build()?;
+            let value: serde_json::Value = client
+                .get("http://127.0.0.1:9090/proxies/WARP/delay")
+                .query(&[("timeout", "8000"), ("url", url)])
+                .send()?
+                .error_for_status()?
+                .json()?;
+            value["delay"].as_u64().context("Нет ответа через WARP")
+        })();
+        match result {
+            Ok(ms) => Service {
+                name,
+                ok: true,
+                detail: format!("{ms} мс"),
+            },
+            Err(e) => Service {
+                name,
+                ok: false,
+                detail: e.to_string(),
+            },
         }
-        let mut open = true;
-        egui::Window::new("Списки проксирования")
-            .id(egui::Id::new("domain-editor-window"))
-            .open(&mut open)
-            .resizable(true)
-            .collapsible(false)
-            .default_size([820.0, 600.0])
-            .min_size([560.0, 380.0])
-            .show(ctx, |ui| {
-                if !self.loaded {
-                    let result: Result<Vec<String>> = LISTS.iter().map(|name| Ok(fs::read_to_string(root.join("app/config/lists").join(name))?)).collect();
-                    match result {
-                        Ok(values) => { self.lists = values.try_into().unwrap(); self.loaded = true; }
-                        Err(error) => { ui.colored_label(Color32::LIGHT_RED, format!("Не удалось прочитать списки: {error}")); return; }
-                    }
-                }
-                ui.horizontal_wrapped(|ui| {
-                    for (index, title) in ["Через WARP", "Напрямую", "AI через Opera"].iter().enumerate() {
-                        ui.selectable_value(&mut self.editor_list, index, *title);
-                    }
-                });
-                ui.label("Один домен на строку. +.example.com включает поддомены. DIRECT имеет приоритет.");
-                if locked { ui.label("Для сохранения отключите соединение и дождитесь завершения операции."); }
-                let enabled = !locked && !self.locked();
-                let height = (ui.available_height() - 100.0).max(200.0);
-                ui.add_enabled_ui(enabled, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt(("domain-editor-text", self.editor_list))
-                        .max_height(height)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.add(egui::TextEdit::multiline(&mut self.lists[self.editor_list])
-                                .code_editor().desired_rows(20).desired_width(f32::INFINITY));
-                        });
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.button("Сохранить все списки").clicked() {
-                            let result = (|| -> Result<()> {
-                                let normalized = self.lists.iter().map(|v| domains(v)).collect::<Result<Vec<_>>>()?;
-                                for (name, text) in LISTS.iter().zip(&normalized) { fs::write(root.join("app/config/lists").join(name), text)?; }
-                                self.lists = normalized.try_into().unwrap(); Ok(())
-                            })();
-                            self.message = result.map(|_| "Списки сохранены. Применятся при подключении.".into()).unwrap_or_else(|e| e.to_string());
-                        }
-                        ui.label(format!("Строк: {}", self.lists[self.editor_list].lines().count()));
-                    });
-                });
-                ui.label(&self.message);
-            });
-        self.editor_open = open;
-    }
-
-    pub fn locked(&self) -> bool {
-        self.rx.is_some()
-    }
-    pub fn show(
-        &mut self,
-        ui: &mut egui::Ui,
-        root: &Path,
-        settings: &Settings,
-        locked: bool,
-        running: bool,
-    ) {
-        egui::CollapsingHeader::new("Дополнительно").show(ui, |ui| {
-            ui.label(format!("Версия {VERSION}"));
-            ui.add_enabled_ui(self.rx.is_none(), |ui| {
-                if ui.button("Проверить обновления").clicked() {
-                    self.task(update);
-                }
-                ui.hyperlink_to(
-                    "Релизы GitHub",
-                    "https://github.com/kwlnd/warp-unblock/releases",
-                );
-                ui.add_enabled_ui(!locked, |ui| {
-                    ui.label("Резервная копия содержит приватный ключ WARP.");
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.button("Экспорт настроек и аккаунта").clicked()
-                        {
-                            let root = root.to_owned();
-                            let s = settings.clone();
-                            self.task(move || export(&root, s));
-                        }
-                        if ui.button("Импорт копии").clicked() {
-                            let root = root.to_owned();
-                            self.task(move || import(&root));
-                        }
-                        if ui.button("QR для телефона").clicked() {
-                            match profile(root)
-                                .and_then(|text| Ok(qrcode::QrCode::new(text.as_bytes())?))
-                            {
-                                Ok(code) => self.qr = Some(code),
-                                Err(e) => self.message = format!("Ошибка: {e:#}"),
-                            }
-                        }
-                    });
-                });
-            });
-            if ui
-                .add_enabled(
-                    running && !locked && self.service_rx.is_none(),
-                    egui::Button::new("Проверить сервисы"),
-                )
-                .clicked()
-            {
-                self.services.clear();
-                let (tx, rx) = mpsc::channel();
-                self.service_rx = Some(rx);
-                std::thread::spawn(move || {
-                    let check = |name: &str, url: &str| -> (String, bool, String) {
-                        let result = (|| -> Result<u64> {
-                            let client = reqwest::blocking::Client::builder()
-                                .no_proxy()
-                                .timeout(Duration::from_secs(12))
-                                .build()?;
-                            let value: serde_json::Value = client
-                                .get("http://127.0.0.1:9090/proxies/WARP/delay")
-                                .query(&[("timeout", "8000"), ("url", url)])
-                                .send()?
-                                .error_for_status()?
-                                .json()?;
-                            value["delay"].as_u64().context("Нет ответа через WARP")
-                        })();
-                        match result {
-                            Ok(ms) => (name.into(), true, format!("{ms} мс")),
-                            Err(e) => (name.into(), false, e.to_string()),
-                        }
-                    };
-                    let _ = tx.send(vec![
-                        check("Discord", "https://discord.com/api/v10/gateway"),
-                        check("YouTube", "https://www.youtube.com/"),
-                        check("Telegram", "https://telegram.org/"),
-                    ]);
-                });
-            }
-            if self.service_rx.is_some() {
-                ui.label("Проверяю сервисы через WARP…");
-            }
-            for (name, ok, detail) in &self.services {
-                ui.colored_label(
-                    if *ok {
-                        Color32::LIGHT_GREEN
-                    } else {
-                        Color32::LIGHT_RED
-                    },
-                    format!("{} {name}: {detail}", if *ok { "✓" } else { "×" }),
-                );
-            }
-            ui.small("Проверяется HTTPS через WARP. Голос и видео требуют отдельной проверки.");
-            if ui.button("Открыть редактор доменов").clicked() {
-                self.open_editor();
-            }
-            ui.label(&self.message);
-        });
-        if let Some(code) = &self.qr {
-            let mut open = true;
-            egui::Window::new("Профиль WARP для телефона")
-                .open(&mut open)
-                .resizable(false)
-                .show(ui.ctx(), |ui| {
-                    ui.label("Содержит приватный ключ. Импортируйте в приложении Android.");
-                    let n = code.width();
-                    let cell = 3.0;
-                    let size = (n + 8) as f32 * cell;
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
-                    ui.painter().rect_filled(rect, 0.0, Color32::WHITE);
-                    for y in 0..n {
-                        for x in 0..n {
-                            if code[(x, y)] == qrcode::Color::Dark {
-                                let min = rect.min
-                                    + egui::vec2((x + 4) as f32 * cell, (y + 4) as f32 * cell);
-                                ui.painter().rect_filled(
-                                    egui::Rect::from_min_size(min, egui::vec2(cell, cell)),
-                                    0.0,
-                                    Color32::BLACK,
-                                );
-                            }
-                        }
-                    }
-                });
-            if !open {
-                self.qr = None;
-            }
-        }
-    }
+    };
+    vec![
+        check("Discord", "https://discord.com/api/v10/gateway"),
+        check("YouTube", "https://www.youtube.com/"),
+        check("Telegram", "https://telegram.org/"),
+    ]
 }
 
 #[cfg(test)]
@@ -642,12 +417,6 @@ mod tests {
         }
         assert_eq!(domains("").unwrap(), "");
         assert_eq!(domains("+.ru\n+.su").unwrap(), "+.ru\n+.su\n");
-    }
-    #[test]
-    fn stable_platform_versions() {
-        assert!(version("android-v0.2.0").is_none());
-        assert!(version("v1.2.3-rc1").is_none());
-        assert!(version("v0.10.0") > version("v0.9.9"));
     }
     #[test]
     fn imported_profile_requires_real_keys_and_both_addresses() {

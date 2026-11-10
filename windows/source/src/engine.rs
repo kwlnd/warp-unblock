@@ -72,6 +72,12 @@ pub struct Settings {
     /// «Ренат мод»: радужная кнопка и картинка на фоне (data/renat.png).
     #[serde(default)]
     pub renat: bool,
+    /// Проверять обновления при запуске и предлагать установку.
+    #[serde(default = "yes")]
+    pub check_updates: bool,
+    /// Версия, которую пользователь попросил не предлагать.
+    #[serde(default)]
+    pub skip_version: String,
 }
 fn yes() -> bool {
     true
@@ -85,6 +91,8 @@ impl Default for Settings {
             autostart: false,
             close_to_tray: true,
             renat: false,
+            check_updates: true,
+            skip_version: String::new(),
         }
     }
 }

@@ -26,6 +26,6 @@ ed9d5379061e5de79c3375cc62246c2142ea1c97d94f4d16bfbea6fb1b7fc889  app/bin/zapret
 
 Правила маршрутизации берутся из [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat), [Davoyan/mihomo-rule-sets](https://github.com/Davoyan/mihomo-rule-sets) и [kwlnd/mihomo-routing](https://github.com/kwlnd/mihomo-routing) и скачиваются при работе приложения.
 
-Библиотеки Rust подтягиваются через `source/Cargo.lock`; GUI построен на [egui/eframe](https://github.com/emilk/egui) (MIT/Apache-2.0).
+Библиотеки Rust подтягиваются через `windows/source/Cargo.lock`; GUI построен на [GPUI](https://github.com/zed-industries/zed) и [GPUI Kit / gpui-component](https://github.com/longbridge/gpui-kit) (Apache-2.0), иконки Lucide (ISC).
 
 Диалоги файлов: rfd (MIT); генерация QR: qrcode-rust (MIT/Apache-2.0); Base64: base64 (MIT/Apache-2.0). Версии закреплены в Cargo.lock.

@@ -70,7 +70,7 @@ pub fn elevate() -> Result<()> {
 const WINDOW_TITLE: &str = "WARP Unblock";
 const TASK_NAME: &str = "WarpUnblock";
 
-/// Показывает/прячет главное окно штатными средствами Windows — без участия кадров egui,
+/// Показывает/прячет главное окно штатными средствами Windows — без участия отрисовки окна,
 /// поэтому работает и когда окно скрыто в трей.
 pub fn show_main_window(show: bool) -> bool {
     unsafe {
