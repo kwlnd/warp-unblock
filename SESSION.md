@@ -6,7 +6,7 @@
 
 - Монорепо: только ветка `main`, папки `windows/` и `android/` (ветки `android`, `monorepo`, `ccr-*` удалены, PR #18 смержен).
 - Релиз один на обе платформы: тег `vX.Y.Z` → `.github/workflows/release.yml` вызывает `windows.yml` и `android.yml`, публикует ZIP, два APK, `SHA256SUMS.txt` (и `.sha256` для ZIP — его читает апдейтер Windows). Версия общая; Android `versionCode` = major·10000+minor·100+patch (у android-v0.3.1 было 10).
-- Выпущены: Windows v0.6.0 (отдельно, до объединения), общий v0.7.0. Старые релизы не удалять — решение пользователя.
+- Выпущены: Windows v0.6.0 (отдельно, до объединения), общие v0.7.0 и v0.7.1 (светящаяся сетка, AI-домены только через Opera). Старые релизы не удалять — решение пользователя.
 - Архив Windows: в корне `README.md` и папка `WarpUnblock/` (exe + `app/`, лицензии в `app/licenses/*.txt`). Пользователь просил не класть кучу .md.
 
 ## Windows (GPUI)
