@@ -54,7 +54,7 @@ example.com
 +.example.org
 ```
 
-Один домен на строку. URL, IP-адреса и строки правил не подходят; международные домены записываются в punycode. [Общий формат списков Windows и Android](DOMAIN-LISTS.md).
+Один домен на строку. URL, IP-адреса и строки правил не подходят; международные домены записываются в punycode. [Общий формат списков Windows и Android](../docs/DOMAIN-LISTS.md).
 
 ## Выбор приложений и автоподключение
 
@@ -74,7 +74,7 @@ example.com
 
 ## Для разработки
 
-Исходники находятся в ветке `android`. Kotlin + Compose, VpnService, mihomo, hev-socks5-tunnel; для регистрации используется ByeDPI. Нативные библиотеки и релизные APK собирает [GitHub Actions](https://github.com/kwlnd/warp-unblock/actions/workflows/android.yml).
+Исходники находятся в папке `android/` ветки `main`. Kotlin + Compose, VpnService, mihomo, hev-socks5-tunnel; для регистрации используется ByeDPI. Нативные библиотеки и релизные APK собирает [GitHub Actions](https://github.com/kwlnd/warp-unblock/actions/workflows/android.yml).
 
 Для локальной сборки нужны JDK 17, Gradle 8.9, Android SDK 34 и нативные библиотеки в `android/app/src/main/jniLibs/<abi>/`:
 
@@ -84,4 +84,4 @@ gradle -p android testDebugUnitTest assembleRelease lintRelease
 
 APK подписываются ключом проекта из `android/hobby-signing.jks`, чтобы обновления ставились поверх. Этот ключ не предназначен для публикации в магазине.
 
-Код приложения — [MIT](LICENSE). Сторонние компоненты: [mihomo](https://github.com/MetaCubeX/mihomo) — GPL-3.0; [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) и [ByeDPI](https://github.com/hufrea/byedpi) — MIT; AndroidX, Compose и [ZXing Android Embedded](https://github.com/journeyapps/zxing-android-embedded) — Apache-2.0; [Bouncy Castle](https://www.bouncycastle.org/) — MIT.
+Код приложения — [MIT](../LICENSE). Сторонние компоненты: [mihomo](https://github.com/MetaCubeX/mihomo) — GPL-3.0; [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) и [ByeDPI](https://github.com/hufrea/byedpi) — MIT; AndroidX, Compose и [ZXing Android Embedded](https://github.com/journeyapps/zxing-android-embedded) — Apache-2.0; [Bouncy Castle](https://www.bouncycastle.org/) — MIT.
