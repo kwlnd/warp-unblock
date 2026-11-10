@@ -14,9 +14,14 @@ rfd = "0.15"
 qrcode = { version = "0.14", default-features = false }
 base64 = "0.22"
 sha2 = "0.10"
+# Та же 0.25, что у GPUI: иконка окна передаётся как image::RgbaImage.
+image = { version = "0.25", default-features = false, features = ["png"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tray-icon = { version = "0.21", default-features = false }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 lto = "thin"

@@ -50,7 +50,16 @@ fn light() -> bool {
 // Иконки Lucide, которых нет в базовом наборе gpui-kit.
 gpui_kit::assets::icon_assets!(
     ExtraIcons,
-    [Power, Route, ListFilter, ScrollText, ShieldCheck, Download]
+    [
+        Power,
+        Route,
+        ListFilter,
+        ScrollText,
+        ShieldCheck,
+        Download,
+        Clock,
+        Activity
+    ]
 );
 
 struct AppAssets;
@@ -139,6 +148,9 @@ pub fn run(root: PathBuf, tray_start: bool, preview: bool) {
                     ..Default::default()
                 }),
                 window_min_size: Some(size(px(720.), px(540.))),
+                icon: image::load_from_memory(include_bytes!("../assets/icons/app.png"))
+                    .ok()
+                    .map(|icon| std::sync::Arc::new(icon.to_rgba8())),
                 show: !tray_start || preview,
                 focus: !tray_start || preview,
                 ..Default::default()
@@ -168,7 +180,7 @@ pub fn run(root: PathBuf, tray_start: bool, preview: bool) {
         });
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Page {
     Home,
     Profiles,
@@ -236,6 +248,18 @@ struct Main {
     pending_update: Option<update::Release>,
     install_after_stop: Option<update::Release>,
     theme_applied: bool,
+    connected_since: Option<Instant>,
+    /// Какую команду ждём от движка — для всплывашки с итогом.
+    pending: Option<&'static str>,
+    toasts: Vec<Toast>,
+    toast_seq: usize,
+}
+
+struct Toast {
+    id: usize,
+    text: String,
+    color: u32,
+    born: Instant,
 }
 
 impl Main {
@@ -322,6 +346,10 @@ impl Main {
             pending_update: None,
             install_after_stop: None,
             theme_applied: false,
+            connected_since: None,
+            pending: None,
+            toasts: Vec::new(),
+            toast_seq: 0,
         };
         if this.settings.check_updates
             && (!preview || std::env::var_os("WARP_PREVIEW_UPDATE").is_some())
@@ -350,6 +378,13 @@ impl Main {
     // ---------- состояние ----------
 
     fn action(&mut self, command: Command, status: &str) {
+        self.pending = Some(match command {
+            Command::Start(_) => "start",
+            Command::Stop | Command::Shutdown => "stop",
+            Command::Test(_) => "test",
+            Command::Auto(_) | Command::Best(_) => "pick",
+            Command::Check => "check",
+        });
         self.stopping = matches!(command, Command::Stop);
         self.busy = true;
         self.stage = None;
@@ -362,6 +397,19 @@ impl Main {
         self.settings.custom_args = self.custom_args.read(cx).value().to_string();
         let _ = self.settings.save(&self.root);
         self.settings.clone()
+    }
+
+    fn toast(&mut self, text: impl Into<String>, color: u32) {
+        self.toast_seq += 1;
+        self.toasts.push(Toast {
+            id: self.toast_seq,
+            text: text.into(),
+            color,
+            born: Instant::now(),
+        });
+        if self.toasts.len() > 4 {
+            self.toasts.remove(0);
+        }
     }
 
     fn log(&mut self, text: String) {
@@ -449,16 +497,34 @@ impl Main {
                     running,
                     status,
                 } => {
+                    if running && !self.running {
+                        self.connected_since = Some(Instant::now());
+                    }
+                    if !running {
+                        self.connected_since = None;
+                    }
                     self.busy = busy;
                     self.running = running;
-                    self.status = status;
                     if !busy {
                         self.stage = None;
                         self.batch = None;
                         self.stopping = false;
+                        match self.pending.take() {
+                            Some("start") if running => {
+                                self.toast(format!("Подключено · {}", self.profile_name()), OK)
+                            }
+                            Some("start") => self.toast(status.clone(), ERROR),
+                            Some("stop") => self.toast("Отключено", MUTED),
+                            Some("test") | Some("pick") => self.toast(status.clone(), ACCENT),
+                            _ => {}
+                        }
                     }
+                    self.status = status;
                 }
                 Event::Check(index, text, ok) => {
+                    if index == 2 && !ok && self.checks[2].1 && self.running && !self.busy {
+                        self.toast("Связь с WARP пропала", ERROR);
+                    }
                     if index == 2 {
                         self.last_health = Some(Instant::now());
                     }
@@ -476,21 +542,31 @@ impl Main {
         }
         if let Some(result) = self.task_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.task_rx = None;
-            self.task_message = match result {
+            let (message, color) = match result {
                 Ok(text) => {
                     if text.starts_with("Импортировано.") {
                         self.settings = Settings::load(&self.root);
                         self.lists = None;
                     }
-                    text
+                    (text, OK)
                 }
-                Err(error) => format!("Ошибка: {error:#}"),
+                Err(error) => (format!("Ошибка: {error:#}"), ERROR),
             };
+            self.toast(message.clone(), color);
+            self.task_message = message;
         }
         if let Some(result) = self.services_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            let ok = result.iter().filter(|s| s.ok).count();
+            let total = result.len();
+            self.toast(
+                format!("Сервисы через WARP: доступно {ok} из {total}"),
+                if ok == total { OK } else { WARN },
+            );
             self.services = result;
             self.services_rx = None;
         }
+        self.toasts
+            .retain(|toast| toast.born.elapsed() < Duration::from_millis(4500));
         while let Some(message) = self.update_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.on_update(message);
         }
@@ -594,10 +670,14 @@ impl Main {
                         }
                     }
                     Ok(None) => {
-                        self.update_message = format!("Версия {} актуальна", update::VERSION)
+                        self.update_message = format!("Версия {} актуальна", update::VERSION);
+                        if manual {
+                            self.toast(self.update_message.clone(), OK);
+                        }
                     }
                     Err(error) if manual => {
-                        self.update_message = format!("Не удалось проверить: {error}")
+                        self.update_message = format!("Не удалось проверить: {error}");
+                        self.toast(self.update_message.clone(), ERROR);
                     }
                     Err(_) => {}
                 }
@@ -718,8 +798,12 @@ impl Main {
                 }
                 self.list_message =
                     "Списки сохранены. Применятся при следующем подключении.".into();
+                self.toast("Списки доменов сохранены", OK);
             }
-            Err(error) => self.list_message = format!("Не сохранено: {error:#}"),
+            Err(error) => {
+                self.list_message = format!("Не сохранено: {error:#}");
+                self.toast(self.list_message.clone(), ERROR);
+            }
         }
     }
 }
@@ -786,7 +870,20 @@ fn button(
             }
         })
     } else {
-        base.opacity(0.45)
+        // Неактивная кнопка: без заливки, приглушённый текст, но контур виден в обеих темах.
+        base.bg(transparent_black())
+            .border_color(c(BORDER))
+            .text_color(c(MUTED))
+    }
+}
+
+/// Подсказка при наведении на неактивный элемент: почему он недоступен.
+fn why(element: Stateful<Div>, reason: Option<&'static str>) -> Stateful<Div> {
+    match reason {
+        Some(reason) => element.tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(reason).build(window, cx)
+        }),
+        None => element,
     }
 }
 
@@ -1060,70 +1157,52 @@ impl Main {
             )
     }
 
-    fn connect_button(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Почему кнопка подключения сейчас недоступна; None — доступна.
+    fn power_blocked(&self) -> Option<&'static str> {
         if self.preview {
-            return text(
-                "Предпросмотр интерфейса · подключение недоступно",
-                14.,
-                MUTED,
-            )
-            .into_any_element();
+            Some("В предпросмотре подключение недоступно")
+        } else if self.stopping {
+            Some("Идёт отключение")
+        } else if self.locked() || self.install_after_stop.is_some() {
+            Some("Дождитесь окончания текущей операции")
+        } else {
+            None
         }
-        if self.locked() || self.install_after_stop.is_some() {
-            return text("Завершите текущую операцию…", 14., MUTED).into_any_element();
-        }
-        let active = self.running || self.busy;
-        let label = match (self.settings.renat, self.stopping, self.running, self.busy) {
-            (_, true, _, _) => "Отключаю…",
-            (true, _, true, _) => "Перестать моггать",
-            (true, _, _, true) => "Отменить",
-            (true, _, _, _) => "Моггать",
-            (false, _, true, _) => "Отключить",
-            (false, _, _, true) => "Отменить",
-            _ => "Подключить",
-        };
+    }
+
+    fn power_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let size = 128.;
         let renat = self.settings.renat && !self.stopping;
-        let fill = if renat {
-            hsla(self.hue(), 0.95, 0.55, 1.0)
-        } else if active {
-            c(SURFACE_HOVER)
+        let (ring, fill, glyph) = if renat {
+            let rainbow = hsla(self.hue(), 0.95, 0.55, 1.0);
+            (rainbow, rainbow, c(0x0f0a19))
+        } else if self.healthy() {
+            (self.accent(), self.accent(), c(ON_ACCENT))
+        } else if self.busy {
+            (c(WARN), c(SURFACE_HOVER), c(WARN))
+        } else if self.running {
+            (c(ERROR), c(SURFACE_HOVER), c(ERROR))
         } else {
-            c(ACCENT)
+            (c(BORDER), c(SURFACE_HOVER), self.accent())
         };
-        let color = if renat {
-            c(0x0f0a19)
-        } else if active {
-            c(TEXT)
-        } else {
-            c(ON_ACCENT)
-        };
-        div()
-            .id("connect")
+        let blocked = self.power_blocked();
+        let button = div()
+            .id("power")
+            .size(px(size))
+            .rounded_full()
             .flex()
             .items_center()
             .justify_center()
-            .w_full()
-            .h(px(58.))
-            .rounded(px(14.))
             .bg(fill)
-            .border_1()
-            .border_color(if active && !renat { c(BORDER) } else { fill })
-            .text_size(px(19.))
-            .font_weight(FontWeight::BOLD)
-            .text_color(color)
-            .when(!self.stopping, |s| {
-                s.cursor_pointer().hover(move |s| {
-                    if renat || active {
-                        s.opacity(0.9)
-                    } else {
-                        s.bg(c(ACCENT_HOVER))
-                    }
-                })
+            .border_2()
+            .border_color(ring)
+            .child(icon("power", 50., glyph))
+            .when(blocked.is_none(), |s| {
+                s.cursor_pointer().hover(|s| s.opacity(0.88))
             })
-            .when(self.stopping, |s| s.opacity(0.6))
-            .child(label)
+            .when(blocked.is_some(), |s| s.opacity(0.6))
             .on_click(cx.listener(move |this, _, _, cx| {
-                if this.stopping {
+                if this.power_blocked().is_some() {
                     return;
                 }
                 if this.running || this.busy {
@@ -1133,45 +1212,86 @@ impl Main {
                     this.action(Command::Start(settings), "Подключаю…");
                 }
                 cx.notify();
-            }))
+            }));
+        let button = why(button, blocked);
+        let halo = div()
+            .absolute()
+            .size(px(size + 26.))
+            .rounded_full()
+            .border_2()
+            .border_color(ring.opacity(if self.healthy() { 0.35 } else { 0.25 }));
+        // Пока идёт подключение или проверка, внешнее кольцо дышит.
+        let halo = if self.busy {
+            halo.with_animation(
+                "power-pulse",
+                Animation::new(Duration::from_millis(1400))
+                    .repeat()
+                    .with_easing(|t| 1.0 - (2.0 * t - 1.0).abs()),
+                |el, t| el.opacity(0.25 + 0.75 * t),
+            )
             .into_any_element()
+        } else {
+            halo.into_any_element()
+        };
+        div()
+            .relative()
+            .size(px(size + 26.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(halo)
+            .child(button)
+            .into_any_element()
+    }
+
+    fn ping(&self) -> Option<String> {
+        let (text, ok) = &self.checks[2];
+        if !*ok || !self.running {
+            return None;
+        }
+        text.rsplit('·').next().map(|v| v.trim().to_owned())
+    }
+
+    fn uptime(&self) -> Option<String> {
+        let secs = self.connected_since?.elapsed().as_secs();
+        Some(format!(
+            "{:02}:{:02}:{:02}",
+            secs / 3600,
+            secs / 60 % 60,
+            secs % 60
+        ))
     }
 
     fn home(&self, cx: &mut Context<Self>) -> Div {
         let accent = self.accent();
-        let mut hero = card().gap_4().child(
-            div()
-                .flex()
-                .items_center()
-                .gap_4()
-                .child(dot(self.state_color(), 14.))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(text(self.title(), 26., TEXT).font_weight(FontWeight::BOLD))
-                        .when(self.running && !self.busy, |s| {
-                            s.child(text(
-                                if self.checks[2].1 {
-                                    self.checks[3].0.clone()
-                                } else {
-                                    self.checks[2].0.clone()
-                                },
-                                14.,
-                                MUTED,
-                            ))
-                        })
-                        .child(text(
-                            format!("Профиль: {}", self.profile_name()),
-                            13.,
-                            MUTED,
-                        )),
-                ),
-        );
+        let hint = if let Some(reason) = self.power_blocked() {
+            reason.to_owned()
+        } else if self.busy {
+            "Нажмите, чтобы отменить".into()
+        } else if self.running && self.checks[2].1 {
+            self.checks[3].0.clone()
+        } else if self.running {
+            self.checks[2].0.clone()
+        } else if self.settings.renat {
+            "Нажмите, чтобы моггать".into()
+        } else {
+            "Нажмите, чтобы подключиться".into()
+        };
+        let mut hero = card()
+            .items_center()
+            .gap_3()
+            .py(px(26.))
+            .child(self.power_button(cx))
+            .child(
+                text(self.title(), 24., TEXT)
+                    .font_weight(FontWeight::BOLD)
+                    .mt(px(6.)),
+            )
+            .child(text(hint, 13., MUTED));
         if self.busy {
+            let mut progress = div().w_full().max_w(px(520.)).flex().flex_col().gap_3();
             if let Some((done, total, failed)) = self.batch {
-                hero = hero.child(
+                progress = progress.child(
                     div()
                         .flex()
                         .flex_col()
@@ -1191,11 +1311,11 @@ impl Main {
                                     TEXT,
                                 )),
                         )
-                        .child(progress_bar(done as f32 / total.max(1) as f32, 10., accent)),
+                        .child(progress_bar(done as f32 / total.max(1) as f32, 8., accent)),
                 );
             }
             if let Some((done, total, label)) = &self.stage {
-                hero = hero.child(
+                progress = progress.child(
                     div()
                         .flex()
                         .flex_col()
@@ -1218,8 +1338,52 @@ impl Main {
                         )),
                 );
             }
+            hero = hero.child(progress);
         }
-        hero = hero.child(self.connect_button(cx));
+        let metric = |label: &str, value: String, glyph: &str| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap_3()
+                .p(px(12.))
+                .rounded(px(12.))
+                .bg(c(SURFACE_HOVER))
+                .child(icon(glyph, 18., c(MUTED)))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .child(text(label.to_owned(), 12., MUTED))
+                        .child(
+                            text(value, 15., TEXT)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap(),
+                        ),
+                )
+        };
+        hero = hero.child(
+            div()
+                .w_full()
+                .flex()
+                .gap_3()
+                .mt(px(8.))
+                .child(metric(
+                    "Время работы",
+                    self.uptime().unwrap_or_else(|| "—".into()),
+                    "clock",
+                ))
+                .child(metric("Профиль", self.profile_name(), "route"))
+                .child(metric(
+                    "Пинг WARP",
+                    self.ping().unwrap_or_else(|| "—".into()),
+                    "activity",
+                )),
+        );
 
         let titles = ["Компоненты", "Профиль", "Тоннель", "Нейросети"];
         let mut tiles = div().flex().gap_3();
@@ -1244,7 +1408,7 @@ impl Main {
         }
         let health = match (self.running, self.last_health) {
             (true, Some(last)) => format!(
-                "Проверено {} с назад · обновляется автоматически",
+                "Состояние проверено {} с назад, обновляется само",
                 last.elapsed().as_secs()
             ),
             _ => String::new(),
@@ -1270,7 +1434,7 @@ impl Main {
                             MUTED,
                         )),
                 )
-                .child(
+                .child(why(
                     button("services", "Проверить", false, can_check, accent).on_click(
                         cx.listener(move |this, _, _, cx| {
                             if !can_check {
@@ -1285,7 +1449,12 @@ impl Main {
                             cx.notify();
                         }),
                     ),
-                ),
+                    (!can_check).then_some(if self.services_rx.is_some() {
+                        "Проверка уже идёт"
+                    } else {
+                        "Сначала подключитесь"
+                    }),
+                )),
         );
         if self.services_rx.is_some() {
             services = services.child(text("Проверяю сервисы через WARP…", 14., MUTED));
@@ -1339,6 +1508,15 @@ impl Main {
     fn profiles(&self, cx: &mut Context<Self>) -> Div {
         let accent = self.accent();
         let enabled = !self.preview && !self.busy && !self.running && !self.locked();
+        let profile_reason = if self.preview {
+            Some("В предпросмотре проверки недоступны")
+        } else if self.running {
+            Some("Сначала отключитесь")
+        } else if !enabled {
+            Some("Дождитесь окончания текущей операции")
+        } else {
+            None
+        };
         let mut list = div().flex().flex_col().gap_1();
         let rows = self
             .catalog
@@ -1416,37 +1594,43 @@ impl Main {
             .flex_wrap()
             .gap_2()
             .child(
-                button("test", "Тест профиля", false, enabled, accent).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        if enabled {
-                            let s = this.connect_settings(cx);
-                            this.action(Command::Test(s), "Проверяю профиль…");
-                            this.page = Page::Home;
-                        }
-                    },
-                )),
+                why(
+                    button("test", "Тест профиля", false, enabled, accent),
+                    profile_reason,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if enabled {
+                        let s = this.connect_settings(cx);
+                        this.action(Command::Test(s), "Проверяю профиль…");
+                        this.page = Page::Home;
+                    }
+                })),
             )
             .child(
-                button("best", "Выбрать лучший", false, enabled, accent).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        if enabled {
-                            let s = this.connect_settings(cx);
-                            this.action(Command::Best(s), "Сравниваю все профили…");
-                            this.page = Page::Home;
-                        }
-                    },
-                )),
+                why(
+                    button("best", "Выбрать лучший", false, enabled, accent),
+                    profile_reason,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if enabled {
+                        let s = this.connect_settings(cx);
+                        this.action(Command::Best(s), "Сравниваю все профили…");
+                        this.page = Page::Home;
+                    }
+                })),
             )
             .child(
-                button("auto", "Подобрать автоматически", true, enabled, accent).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        if enabled {
-                            let s = this.connect_settings(cx);
-                            this.action(Command::Auto(s), "Подбираю профиль WARP…");
-                            this.page = Page::Home;
-                        }
-                    }),
-                ),
+                why(
+                    button("auto", "Подобрать автоматически", true, enabled, accent),
+                    profile_reason,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if enabled {
+                        let s = this.connect_settings(cx);
+                        this.action(Command::Auto(s), "Подбираю профиль WARP…");
+                        this.page = Page::Home;
+                    }
+                })),
             );
         let mut body = div()
             .flex()
@@ -1524,13 +1708,26 @@ impl Main {
                             .items_center()
                             .gap_3()
                             .child(
-                                button("save-lists", "Сохранить все списки", true, !locked, accent)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                why(
+                                    button(
+                                        "save-lists",
+                                        "Сохранить все списки",
+                                        true,
+                                        !locked,
+                                        accent,
+                                    ),
+                                    locked.then_some(
+                                        "Отключите соединение и дождитесь окончания операции",
+                                    ),
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
                                         if !locked {
                                             this.save_lists(window, cx);
                                             cx.notify();
                                         }
-                                    })),
+                                    },
+                                )),
                             )
                             .child(text(format!("Строк: {lines}"), 13., MUTED)),
                     )
@@ -1786,12 +1983,16 @@ impl Main {
                     .flex_wrap()
                     .gap_2()
                     .child(
-                        button(
-                            "export",
-                            "Экспорт настроек и аккаунта",
-                            false,
-                            !files_locked,
-                            accent,
+                        why(
+                            button(
+                                "export",
+                                "Экспорт настроек и аккаунта",
+                                false,
+                                !files_locked,
+                                accent,
+                            ),
+                            files_locked
+                                .then_some("Отключите соединение и дождитесь окончания операции"),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if !files_locked {
@@ -1802,28 +2003,34 @@ impl Main {
                         })),
                     )
                     .child(
-                        button("import", "Импорт копии", false, !files_locked, accent).on_click(
-                            cx.listener(move |this, _, _, _| {
-                                if !files_locked {
-                                    let root = this.root.clone();
-                                    this.task(move || features::import_backup(&root));
-                                }
-                            }),
-                        ),
+                        why(
+                            button("import", "Импорт копии", false, !files_locked, accent),
+                            files_locked
+                                .then_some("Отключите соединение и дождитесь окончания операции"),
+                        )
+                        .on_click(cx.listener(move |this, _, _, _| {
+                            if !files_locked {
+                                let root = this.root.clone();
+                                this.task(move || features::import_backup(&root));
+                            }
+                        })),
                     )
                     .child(
-                        button("qr", "QR для телефона", false, !files_locked, accent).on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                if files_locked {
-                                    return;
-                                }
-                                match features::qr(&this.root) {
-                                    Ok(code) => this.modal = Some(Modal::Qr(code)),
-                                    Err(e) => this.task_message = format!("Ошибка: {e:#}"),
-                                }
-                                cx.notify();
-                            }),
-                        ),
+                        why(
+                            button("qr", "QR для телефона", false, !files_locked, accent),
+                            files_locked
+                                .then_some("Отключите соединение и дождитесь окончания операции"),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if files_locked {
+                                return;
+                            }
+                            match features::qr(&this.root) {
+                                Ok(code) => this.modal = Some(Modal::Qr(code)),
+                                Err(e) => this.task_message = format!("Ошибка: {e:#}"),
+                            }
+                            cx.notify();
+                        })),
                     ),
             )
             .when(!self.task_message.is_empty(), |s| {
@@ -2012,7 +2219,7 @@ impl Main {
                                 }),
                             ))
                             .child(
-                                button("update-now", "Обновить", true, !self.preview, accent)
+                                why(button("update-now", "Обновить", true, !self.preview, accent), self.preview.then_some("В предпросмотре установка недоступна"))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if !this.preview {
                                             this.begin_install(install.clone());
@@ -2078,9 +2285,50 @@ impl Main {
                 .justify_center()
                 .bg(hsla(0., 0., 0., if light() { 0.35 } else { 0.6 }))
                 .occlude()
-                .child(body.shadow_lg())
+                .child(body.shadow_lg().with_animation(
+                    "modal-in",
+                    Animation::new(Duration::from_millis(160)).with_easing(ease_out_quint()),
+                    |el, t| el.opacity(t).mt(px((1.0 - t) * 12.)),
+                ))
                 .into_any_element(),
         )
+    }
+
+    fn toasts_view(&self) -> Option<AnyElement> {
+        if self.toasts.is_empty() {
+            return None;
+        }
+        let mut column = div()
+            .absolute()
+            .bottom(px(18.))
+            .right(px(18.))
+            .w(px(340.))
+            .flex()
+            .flex_col()
+            .gap_2();
+        for toast in &self.toasts {
+            column = column.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px(px(14.))
+                    .py(px(12.))
+                    .rounded(px(12.))
+                    .bg(c(SURFACE))
+                    .border_1()
+                    .border_color(c(BORDER))
+                    .shadow_lg()
+                    .child(dot(c(toast.color), 9.))
+                    .child(text(toast.text.clone(), 13., TEXT).flex_1().min_w_0())
+                    .with_animation(
+                        ("toast", toast.id),
+                        Animation::new(Duration::from_millis(220)).with_easing(ease_out_quint()),
+                        |el, t| el.opacity(t).ml(px((1.0 - t) * 24.)),
+                    ),
+            );
+        }
+        Some(column.into_any_element())
     }
 
     fn backdrop(&self) -> Option<AnyElement> {
@@ -2116,6 +2364,12 @@ impl Render for Main {
             Page::Settings => self.settings_page(cx),
             Page::Journal => self.journal_page(cx),
         };
+        // Страница появляется с коротким сдвигом снизу; id меняется вместе со страницей.
+        let page = page.with_animation(
+            SharedString::from(format!("page-{:?}", self.page)),
+            Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()),
+            |el, t| el.opacity(t).mt(px((1.0 - t) * 10.)),
+        );
         let content = if self.page == Page::Lists {
             div().flex_1().min_w_0().h_full().p(px(28.)).child(page)
         } else {
@@ -2148,6 +2402,7 @@ impl Render for Main {
                     .child(content),
             )
             .children(modal)
+            .children(self.toasts_view())
     }
 }
 

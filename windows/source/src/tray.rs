@@ -30,6 +30,7 @@ pub struct Tray {
     tip: String,
 }
 
+/// Щит из assets/icons/tray-mask.png, окрашенный в цвет состояния.
 fn render(look: Look) -> Icon {
     let (r, g, b) = match look {
         Look::Off => (128, 134, 146),
@@ -37,22 +38,15 @@ fn render(look: Look) -> Icon {
         Look::Ok => (246, 130, 31),
         Look::Error => (242, 102, 109),
     };
-    let size = 32u32;
-    let mut rgba = Vec::with_capacity((size * size * 4) as usize);
-    for y in 0..size {
-        for x in 0..size {
-            let dx = x as f32 + 0.5 - 16.0;
-            let dy = y as f32 + 0.5 - 16.0;
-            let distance = (dx * dx + dy * dy).sqrt();
-            // Кольцо с точкой внутри, сглаженные края.
-            let ring = (1.0 - (distance - 13.0).max(0.0)).clamp(0.0, 1.0)
-                * (distance - 8.5).clamp(0.0, 1.0);
-            let dot = (1.0 - (distance - 5.0).max(0.0)).clamp(0.0, 1.0);
-            let alpha = (ring + dot).clamp(0.0, 1.0);
-            rgba.extend([r, g, b, (alpha * 255.0) as u8]);
-        }
-    }
-    Icon::from_rgba(rgba, size, size).expect("valid icon")
+    let mask = image::load_from_memory(include_bytes!("../assets/icons/tray-mask.png"))
+        .expect("tray mask")
+        .to_rgba8();
+    let (width, height) = mask.dimensions();
+    let rgba = mask
+        .pixels()
+        .flat_map(|p| [r, g, b, p.0[3]])
+        .collect::<Vec<_>>();
+    Icon::from_rgba(rgba, width, height).expect("valid icon")
 }
 
 impl Tray {
