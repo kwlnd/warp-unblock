@@ -2,14 +2,14 @@
 
 Клиент для Android 7.0 и новее. Выбранные домены идут через Cloudflare WARP, остальной трафик по умолчанию — напрямую. Root не требуется.
 
-**[Скачать Android v0.3.1](https://github.com/kwlnd/warp-unblock/releases/tag/android-v0.3.1) · [Все релизы](https://github.com/kwlnd/warp-unblock/releases) · [Windows-версия](https://github.com/kwlnd/warp-unblock)**
+**[Скачать Android v0.4.0](https://github.com/kwlnd/warp-unblock/releases/tag/android-v0.4.0) · [Все релизы](https://github.com/kwlnd/warp-unblock/releases) · [Windows-версия](../windows/README.md)**
 
 ## Какой APK скачать
 
 | Файл | Устройство |
 | --- | --- |
-| [arm64-v8a](https://github.com/kwlnd/warp-unblock/releases/download/android-v0.3.1/WarpUnblock-android-v0.3.1-arm64-v8a.apk) | Большинство современных телефонов |
-| [armeabi-v7a](https://github.com/kwlnd/warp-unblock/releases/download/android-v0.3.1/WarpUnblock-android-v0.3.1-armeabi-v7a.apk) | Старые 32-битные устройства |
+| [arm64-v8a](https://github.com/kwlnd/warp-unblock/releases/download/android-v0.4.0/WarpUnblock-android-v0.4.0-arm64-v8a.apk) | Большинство современных телефонов |
+| [armeabi-v7a](https://github.com/kwlnd/warp-unblock/releases/download/android-v0.4.0/WarpUnblock-android-v0.4.0-armeabi-v7a.apk) | Старые 32-битные устройства |
 
 Контрольные суммы находятся в `SHA256SUMS.txt` на странице релиза.
 
@@ -29,7 +29,7 @@
 
 На телефоне вручную проверены базовые сценарии: регистрация WARP с обходом DPI через ByeDPI, автоподбор, подключение, голос Discord и работа обычного интернета. Это проверка конкретного устройства и подключения, а не всех операторов и оболочек.
 
-Для v0.3.1 прошли 5 unit-тестов, сборки двух APK и Android Lint. Новые настройки — выбор приложений, автозапуск, Always-on, камера QR и отправка журнала — реализованы, но ещё требуют практической проверки на телефонах. Длительная работа, переключение сетей и игровой голос отдельно не проверены.
+Для v0.4.0 прошли 7 unit-тестов, сборки двух APK и Android Lint. Новые настройки — выбор приложений, автозапуск, Always-on, камера QR и отправка журнала — реализованы, но ещё требуют практической проверки на телефонах. Длительная работа, переключение сетей и игровой голос отдельно не проверены.
 
 ## Если не проходит регистрация WARP
 

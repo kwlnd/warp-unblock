@@ -8,9 +8,9 @@
 
 | Платформа | Последняя версия | Скачать |
 | --- | --- | --- |
-| Windows x64 | [v0.5.1](https://github.com/kwlnd/warp-unblock/releases/tag/v0.5.1) | [ZIP с приложением](https://github.com/kwlnd/warp-unblock/releases/download/v0.5.1/WarpUnblock-v0.5.1-win-x64.zip) |
-| Android 7.0+, большинство современных телефонов | [v0.3.1](https://github.com/kwlnd/warp-unblock/releases/tag/android-v0.3.1) | [APK arm64-v8a](https://github.com/kwlnd/warp-unblock/releases/download/android-v0.3.1/WarpUnblock-android-v0.3.1-arm64-v8a.apk) |
-| Android 7.0+, старые 32-битные устройства | [v0.3.1](https://github.com/kwlnd/warp-unblock/releases/tag/android-v0.3.1) | [APK armeabi-v7a](https://github.com/kwlnd/warp-unblock/releases/download/android-v0.3.1/WarpUnblock-android-v0.3.1-armeabi-v7a.apk) |
+| Windows x64 | [v0.6.0](https://github.com/kwlnd/warp-unblock/releases/tag/v0.6.0) | [ZIP с приложением](https://github.com/kwlnd/warp-unblock/releases/download/v0.6.0/WarpUnblock-v0.6.0-win-x64.zip) |
+| Android 7.0+, большинство современных телефонов | [v0.4.0](https://github.com/kwlnd/warp-unblock/releases/tag/android-v0.4.0) | [APK arm64-v8a](https://github.com/kwlnd/warp-unblock/releases/download/android-v0.4.0/WarpUnblock-android-v0.4.0-arm64-v8a.apk) |
+| Android 7.0+, старые 32-битные устройства | [v0.4.0](https://github.com/kwlnd/warp-unblock/releases/tag/android-v0.4.0) | [APK armeabi-v7a](https://github.com/kwlnd/warp-unblock/releases/download/android-v0.4.0/WarpUnblock-android-v0.4.0-armeabi-v7a.apk) |
 
 В релизах рядом с архивом и APK лежат контрольные суммы SHA-256. Для установки нужны файлы из Releases; скачивать исходники через **Code → Download ZIP** не требуется.
 
@@ -48,7 +48,7 @@
 
 ## Что проверено, а что ещё нет
 
-Состояние на **6 ноября 2026 года**. Успешная сборка и зелёный статус соединения не означают, что проверены все сайты, приложения и провайдеры.
+Состояние на **10 ноября 2026 года**. Успешная сборка и зелёный статус соединения не означают, что проверены все сайты, приложения и провайдеры.
 
 | Возможность | Статус |
 | --- | --- |
@@ -59,7 +59,9 @@
 | Новые настройки Android: приложения в VPN, автозапуск, Always-on, камера QR, отправка журнала | Реализованы и собираются; практическая проверка на разных телефонах ещё нужна |
 | Windows: автозапуск, поведение трея и новый большой редактор | Реализованы; полный ручной прогон текущего релиза ещё нужен |
 | Игровой голос, голосовые режимы AI, длительная работа и переключение сетей | Отдельно не проверены |
-| Автоматические проверки текущих версий | Прошли 12 тестов Windows и 5 Android, сборки обеих платформ, Clippy и Android Lint |
+| Windows: новый интерфейс на GPUI, светлая тема, своя плашка окна | Проверены в окне без подключения; трей и работа при подключении ещё ждут ручного прогона |
+| Автообновление из окна «Доступна версия» | Загрузка и проверка SHA-256 на опубликованном релизе работают; полная установка с перезапуском заработает начиная со следующей версии после этой |
+| Автоматические проверки текущих версий | Прошли 15 тестов Windows и 7 Android, сборки обеих платформ, Clippy и Android Lint |
 
 Заранее обещать работу у любого провайдера нельзя. Если конкретный сервис не работает, полезен отчёт с платформой, версией, выбранным профилем и текстом ошибки: **[создать issue](https://github.com/kwlnd/warp-unblock/issues/new)**.
 
