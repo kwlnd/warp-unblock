@@ -13,14 +13,6 @@ api.ip.sb
 2ip.io
 2ipcore.com
 
-# Google AI (agy, AI Studio, Gemini)
-+.daily-cloudcode-pa.googleapis.com
-+.generativelanguage.googleapis.com
-+.proactivebackend-pa.googleapis.com
-+.alkalimakersuite-pa.clients6.google.com
-+.aistudio.google.com
-+.gemini.google.com
-+.artificialanalysis.ai
 
 # Blocked / restricted in RU
 +.ua
@@ -99,19 +91,10 @@ web.telegram.org
 +.notion.site
 
 # OpenAI / ChatGPT
-+.openai.com
 chat.openai.com
-+.chatgpt.com
 
-# Anthropic / Claude
-+.anthropic.com
-+.claude.ai
 
-# Perplexity
-+.perplexity.ai
 
-# Hugging Face
-+.huggingface.co
 
 # GitHub
 +.github.com

@@ -2,7 +2,7 @@
 //! страницы профилей, списков доменов, настроек и журнала, модальные окна поверх.
 use crate::{
     engine::{Command, Event, Settings, Worker},
-    features, platform, strategies, tray, update,
+    features, glow, platform, strategies, tray, update,
 };
 use gpui_kit::component::input::{Textarea, TextareaState};
 use gpui_kit::component::Icon;
@@ -248,6 +248,8 @@ struct Main {
     pending_update: Option<update::Release>,
     install_after_stop: Option<update::Release>,
     theme_applied: bool,
+    /// Запечённая светящаяся сетка главной карточки.
+    glow_cache: std::rc::Rc<std::cell::RefCell<glow::Cache>>,
     connected_since: Option<Instant>,
     /// Какую команду ждём от движка — для всплывашки с итогом.
     pending: Option<&'static str>,
@@ -346,6 +348,7 @@ impl Main {
             pending_update: None,
             install_after_stop: None,
             theme_applied: false,
+            glow_cache: Default::default(),
             connected_since: None,
             pending: None,
             toasts: Vec::new(),
@@ -361,7 +364,8 @@ impl Main {
             let renat = this
                 .update_in(cx, |this, window, cx| {
                     this.tick(window, cx);
-                    this.settings.renat
+                    // Радужный режим и светящаяся сетка на главной анимируются ~30 кадров/с.
+                    this.settings.renat || (this.page == Page::Home && window.is_window_active())
                 })
                 .unwrap_or(false);
             if this.upgrade().is_none() {
@@ -585,6 +589,26 @@ impl Main {
         if tray::QUIT.swap(false, std::sync::atomic::Ordering::Relaxed) {
             self.quit(cx);
             return;
+        }
+        // Только предпросмотр: WARP_PREVIEW_STATE=busy|on|error показывает интерфейс в этом состоянии.
+        if self.preview {
+            if let Ok(state) = std::env::var("WARP_PREVIEW_STATE") {
+                let all = |ok| std::array::from_fn(|i| (format!("Проверка {i}"), ok));
+                match state.as_str() {
+                    "busy" => {
+                        (self.busy, self.running, self.status) = (true, false, "Подключаю…".into())
+                    }
+                    "on" => {
+                        (self.busy, self.running) = (false, true);
+                        self.checks = all(true);
+                    }
+                    "error" => {
+                        (self.busy, self.running) = (false, true);
+                        self.checks = all(false);
+                    }
+                    _ => {}
+                }
+            }
         }
         if self.page == Page::Lists && self.lists.is_none() {
             self.load_lists(window, cx);
@@ -1249,6 +1273,45 @@ impl Main {
             .into_any_element()
     }
 
+    /// Светящаяся сетка за главной карточкой (см. glow.rs). Кадры даёт таймер `tick`.
+    fn glow(&self) -> AnyElement {
+        let mode = if self.busy {
+            glow::Mode::Waves
+        } else if self.healthy() {
+            glow::Mode::On
+        } else if self.running {
+            glow::Mode::Error
+        } else {
+            glow::Mode::Idle
+        };
+        let color = match mode {
+            glow::Mode::Waves => c(WARN).blend(self.accent().opacity(0.55)),
+            glow::Mode::Error => c(ERROR),
+            _ => self.accent(),
+        };
+        let frame = glow::Frame {
+            mode,
+            color,
+            star: Hsla {
+                l: (color.l + 0.28).min(0.94),
+                s: color.s * 0.85,
+                ..color
+            },
+            floor: if light() { 0.035 } else { 0.045 },
+            time: self.started.elapsed().as_secs_f32(),
+        };
+        let cache = self.glow_cache.clone();
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                glow::paint(window, bounds, &mut cache.borrow_mut(), &frame)
+            },
+        )
+        .absolute()
+        .inset_0()
+        .into_any_element()
+    }
+
     fn ping(&self) -> Option<String> {
         let (text, ok) = &self.checks[2];
         if !*ok || !self.running {
@@ -1282,9 +1345,13 @@ impl Main {
         } else {
             "Нажмите, чтобы подключиться".into()
         };
-        let mut hero = card()
+        // Без фона и рамки: их даёт рамка ниже, под ней же лежит светящаяся сетка.
+        let mut hero = div()
+            .flex()
+            .flex_col()
             .items_center()
             .gap_3()
+            .px(px(18.))
             .py(px(26.))
             .child(self.power_button(cx))
             .child(
@@ -1494,7 +1561,17 @@ impl Main {
             .flex()
             .flex_col()
             .gap_4()
-            .child(hero)
+            .child(
+                div()
+                    .relative()
+                    .overflow_hidden()
+                    .rounded(px(14.))
+                    .bg(c(SURFACE))
+                    .border_1()
+                    .border_color(c(BORDER))
+                    .children((!self.settings.renat).then(|| self.glow()))
+                    .child(hero),
+            )
             .child(tiles)
             .when(!health.is_empty(), |s| s.child(text(health, 13., MUTED)))
             .child(services)

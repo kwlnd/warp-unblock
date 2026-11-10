@@ -20,6 +20,7 @@ class ScreenshotTest {
     fun only() {
         assumeTrue(System.getProperty("warp.screenshots").orEmpty().isNotEmpty())
         AppState.init(ApplicationProvider.getApplicationContext())
+        Motion.frozen = true
     }
 
     private fun shot(name: String, night: Boolean, tab: Int) {

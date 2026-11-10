@@ -289,7 +289,29 @@ private fun Home(ui: UiState, onToggle: () -> Unit) {
         ui.phase == Phase.CONNECTED -> "Нажмите, чтобы отключиться"
         else -> "Нажмите, чтобы подключиться"
     }
-    WarpCard(padding = 22.dp) {
+    // Светящаяся сетка за кнопкой: цвет состояния, при подключении пятна двигаются быстрее.
+    val healthy = ui.phase == Phase.CONNECTED && !ui.title.startsWith("Нет связи")
+    val glowColor = when {
+        healthy -> p.accent
+        ui.phase == Phase.BUSY -> androidx.compose.ui.graphics.lerp(p.accent, p.warn, 0.45f)
+        ui.phase == Phase.CONNECTED || ui.phase == Phase.ERROR -> p.error
+        else -> p.accent
+    }
+    WarpCard(
+        padding = 22.dp,
+        backdrop = {
+            GlowGrid(
+                mode = when {
+                    healthy -> GlowMode.ON
+                    ui.phase == Phase.BUSY -> GlowMode.WAVES
+                    ui.phase == Phase.CONNECTED || ui.phase == Phase.ERROR -> GlowMode.ERROR
+                    else -> GlowMode.IDLE
+                },
+                color = glowColor,
+                modifier = Modifier.matchParentSize(),
+            )
+        },
+    ) {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             PowerButton(ui, onToggle)
             Text(ui.title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = p.text, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
