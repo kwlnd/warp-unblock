@@ -1402,7 +1402,7 @@ impl Main {
         apply: fn(&mut Main, bool),
     ) -> impl IntoElement {
         // В предпросмотре нельзя трогать систему (задачу планировщика автозапуска).
-        let enabled = !self.locked() && !(self.preview && id == "autostart");
+        let enabled = !(self.locked() || self.preview && id == "autostart");
         div()
             .flex()
             .items_center()
