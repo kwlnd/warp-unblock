@@ -18,6 +18,12 @@ class Preferences(context: Context) {
     var apps: Set<String>
         get() = prefs.getStringSet("apps", emptySet())!!.toSet()
         set(value) { prefs.edit().putStringSet("apps", value.toSet()).apply() }
+    var checkUpdates: Boolean
+        get() = prefs.getBoolean("check_updates", true)
+        set(value) { prefs.edit().putBoolean("check_updates", value).apply() }
+    var skipVersion: String
+        get() = prefs.getString("skip_version", "") ?: ""
+        set(value) { prefs.edit().putString("skip_version", value).apply() }
 }
 
 /** Portable domain-list v1; identical rules on Windows and Android. */

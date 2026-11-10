@@ -115,12 +115,14 @@ class MainActivity : ComponentActivity() {
         AppState.init(this)
         connectIfRequested()
         if (Preferences(this).autoConnect && VpnService.prepare(this) == null && AppState.ui.value.phase == Phase.IDLE) startVpn()
+        UpdateState.checkOnStart(this)
         setContent {
             WarpTheme {
                 Screen(
                     onToggle = ::toggle,
                     onAuto = { Selector.start(this) },
                 )
+                UpdateDialog()
             }
         }
     }

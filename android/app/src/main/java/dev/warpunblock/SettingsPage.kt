@@ -12,51 +12,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import java.net.HttpURLConnection
-import java.net.URL
-
-internal fun stableVersion(tag: String): List<Int>? {
-    if (!Regex("[0-9]+\\.[0-9]+\\.[0-9]+").matches(tag)) return null
-    return tag.split('.').map { it.toIntOrNull() ?: return null }
-}
-private fun compareVersion(a: List<Int>, b: List<Int>): Int {
-    for (i in 0..2) if (a[i] != b[i]) return a[i].compareTo(b[i])
-    return 0
-}
-private fun checkUpdates(): String {
-    var newest: List<Int>? = null
-    for (page in 1..10) {
-        val connection = URL("https://api.github.com/repos/kwlnd/warp-unblock/releases?per_page=100&page=$page").openConnection() as HttpURLConnection
-        connection.connectTimeout = 10_000
-        connection.readTimeout = 15_000
-        connection.setRequestProperty("User-Agent", "warp-unblock-android")
-        val releases = try {
-            check(connection.responseCode == 200) { "GitHub: HTTP ${connection.responseCode} (для приватного репозитория проверка недоступна)" }
-            JSONArray(connection.inputStream.bufferedReader().use { it.readText() })
-        } finally { connection.disconnect() }
-        for (i in 0 until releases.length()) {
-            val release = releases.getJSONObject(i)
-            if (release.optBoolean("draft") || release.optBoolean("prerelease")) continue
-            val tag = release.optString("tag_name")
-            if (!tag.startsWith("android-v")) continue
-            val version = stableVersion(tag.removePrefix("android-v")) ?: continue
-            if (newest == null || compareVersion(version, newest!!) > 0) newest = version
-        }
-        if (releases.length() < 100) break
-    }
-    val latest = newest ?: error("Нет стабильных Android-релизов")
-    val current = stableVersion(BuildConfig.VERSION_NAME) ?: error("Неизвестная версия приложения")
-    return if (compareVersion(latest, current) > 0) "Доступна Android v${latest.joinToString(".")}. Откройте релизы для загрузки." else "Версия ${BuildConfig.VERSION_NAME} актуальна"
-}
 
 @Composable
 internal fun SettingsPage(locked: Boolean) {
     val context = LocalContext.current
     val prefs = remember { Preferences(context) }
-    val scope = rememberCoroutineScope()
     var boot by remember { mutableStateOf(prefs.boot) }
     var auto by remember { mutableStateOf(prefs.autoConnect) }
     var mode by remember { mutableStateOf(prefs.appMode) }
@@ -64,7 +25,10 @@ internal fun SettingsPage(locked: Boolean) {
     var proxy by remember { mutableStateOf(DomainLists.read(context, "proxy-domains.txt")) }
     var direct by remember { mutableStateOf(DomainLists.read(context, "direct-domains.txt")) }
     var message by remember { mutableStateOf("") }
-    var checking by remember { mutableStateOf(false) }
+    var checkUpdates by remember { mutableStateOf(prefs.checkUpdates) }
+    val checking by UpdateState.checking.collectAsState()
+    val available by UpdateState.available.collectAsState()
+    val updateMessage by UpdateState.message.collectAsState()
     var showApps by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
     val apps by produceState<List<Pair<String, String>>>(emptyList()) {
@@ -127,13 +91,20 @@ internal fun SettingsPage(locked: Boolean) {
     Card {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Версия ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleLarge)
-            FilledTonalButton(onClick = {
-                checking = true; message = "Проверяю обновления…"
-                scope.launch {
-                    message = withContext(Dispatchers.IO) { runCatching { checkUpdates() }.getOrElse { "Ошибка: ${it.message}" } }
-                    checking = false
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Проверять обновления при запуске", Modifier.weight(1f))
+                Switch(checkUpdates, { checkUpdates = it; prefs.checkUpdates = it })
+            }
+            Text("Если вышла новая версия, появится окно: скачать APK, проверить SHA-256 и открыть установщик.")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = { UpdateState.check(context, manual = true) }, enabled = !checking) {
+                    Text(if (checking) "Проверяю…" else "Проверить обновления")
                 }
-            }, enabled = !checking) { Text(if (checking) "Проверяю…" else "Проверить обновления") }
+                available?.let { release ->
+                    Button(onClick = { UpdateState.dialog.value = UpdateState.Dialog.Available(release) }) { Text("Установить ${release.version}") }
+                }
+            }
+            if (updateMessage.isNotEmpty()) Text(updateMessage, style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/kwlnd/warp-unblock/releases"))) }) { Text("Открыть релизы") }
         }
     }
