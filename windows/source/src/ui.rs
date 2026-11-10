@@ -1149,11 +1149,16 @@ impl Main {
                     .items_center()
                     .gap_2()
                     .children(update_badge)
-                    .child(text(
-                        format!("v{}", update::VERSION.trim_start_matches('v')),
-                        11.,
-                        MUTED,
-                    )),
+                    .child(
+                        text(
+                            format!("v{}", update::VERSION.trim_start_matches('v')),
+                            11.,
+                            MUTED,
+                        )
+                        .w_full()
+                        .text_center()
+                        .font_weight(FontWeight::BOLD),
+                    ),
             )
     }
 
