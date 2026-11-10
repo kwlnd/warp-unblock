@@ -78,6 +78,12 @@ pub struct Settings {
     /// Версия, которую пользователь попросил не предлагать.
     #[serde(default)]
     pub skip_version: String,
+    /// Тема интерфейса: system, light или dark.
+    #[serde(default = "system_theme")]
+    pub theme: String,
+}
+fn system_theme() -> String {
+    "system".into()
 }
 fn yes() -> bool {
     true
@@ -93,6 +99,7 @@ impl Default for Settings {
             renat: false,
             check_updates: true,
             skip_version: String::new(),
+            theme: system_theme(),
         }
     }
 }

@@ -31,17 +31,20 @@ const ON_ACCENT: u32 = 0x1c1004;
 const OK: u32 = 0x4cc38a;
 const WARN: u32 = 0xf0b429;
 const ERROR: u32 = 0xf2666d;
-/// Segoe UI Variable — системный шрифт Windows 11; на Windows 10 его нет, там Segoe UI.
-fn font() -> &'static str {
-    static FONT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-    FONT.get_or_init(|| {
-        let windows = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
-        if PathBuf::from(windows).join("Fonts/SegUIVar.ttf").is_file() {
-            "Segoe UI Variable Text"
-        } else {
-            "Segoe UI"
-        }
-    })
+/// Manrope вшит в программу, поэтому выглядит одинаково на любой Windows.
+const FONT: &str = "Manrope";
+const FONT_FILES: [&[u8]; 4] = [
+    include_bytes!("../assets/fonts/Manrope-Regular.ttf"),
+    include_bytes!("../assets/fonts/Manrope-Medium.ttf"),
+    include_bytes!("../assets/fonts/Manrope-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/Manrope-Bold.ttf"),
+];
+
+/// Светлая тема активна (системная светлая или выбранная вручную).
+static LIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn light() -> bool {
+    LIGHT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 // Иконки Lucide, которых нет в базовом наборе gpui-kit.
@@ -90,7 +93,28 @@ const RENAT_OFF: [&str; 3] = [
     "app/assets/renat-off.jpg",
 ];
 
+/// Цвет палитры: константы заданы для тёмной темы, светлая подставляет пару.
 fn c(hex: u32) -> Hsla {
+    let hex = if light() {
+        match hex {
+            BACKGROUND => 0xf4f5f7,
+            SIDEBAR => 0xeaecf0,
+            SURFACE => 0xffffff,
+            SURFACE_HOVER => 0xe6e8ed,
+            BORDER => 0xd7dae1,
+            TEXT => 0x15171c,
+            MUTED => 0x5c6370,
+            ACCENT => 0xe8700f,
+            ACCENT_HOVER => 0xf6821f,
+            ON_ACCENT => 0xffffff,
+            OK => 0x1a9a5e,
+            WARN => 0xb7791f,
+            ERROR => 0xd4343d,
+            other => other,
+        }
+    } else {
+        hex
+    };
     rgb(hex).into()
 }
 
@@ -99,12 +123,19 @@ pub fn run(root: PathBuf, tray_start: bool, preview: bool) {
         .with_assets(AppAssets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
-            gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);
+            let _ = cx.text_system().add_fonts(
+                FONT_FILES
+                    .iter()
+                    .map(|f| std::borrow::Cow::Borrowed(*f))
+                    .collect(),
+            );
             let bounds = Bounds::centered(None, size(px(980.), px(760.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                // Своя плашка: системный заголовок прозрачный, кнопки окна рисуем сами.
                 titlebar: Some(TitlebarOptions {
                     title: Some("WARP Unblock".into()),
+                    appears_transparent: true,
                     ..Default::default()
                 }),
                 window_min_size: Some(size(px(720.), px(540.))),
@@ -204,6 +235,7 @@ struct Main {
     update_message: String,
     pending_update: Option<update::Release>,
     install_after_stop: Option<update::Release>,
+    theme_applied: bool,
 }
 
 impl Main {
@@ -289,6 +321,7 @@ impl Main {
             update_message: String::new(),
             pending_update: None,
             install_after_stop: None,
+            theme_applied: false,
         };
         if this.settings.check_updates
             && (!preview || std::env::var_os("WARP_PREVIEW_UPDATE").is_some())
@@ -384,7 +417,30 @@ impl Main {
         }
     }
 
+    /// Тема: «system» следует за Windows, «light»/«dark» — выбор пользователя.
+    fn sync_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let want = match self.settings.theme.as_str() {
+            "light" => true,
+            "dark" => false,
+            _ => matches!(
+                window.appearance(),
+                WindowAppearance::Light | WindowAppearance::VibrantLight
+            ),
+        };
+        if want != light() || !self.theme_applied {
+            LIGHT.store(want, std::sync::atomic::Ordering::Relaxed);
+            let mode = if want {
+                gpui_kit::component::ThemeMode::Light
+            } else {
+                gpui_kit::component::ThemeMode::Dark
+            };
+            gpui_kit::component::Theme::change(mode, Some(window), cx);
+            self.theme_applied = true;
+        }
+    }
+
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_theme(window, cx);
         while let Ok(event) = self.worker.rx.try_recv() {
             match event {
                 Event::Log(text) => self.log(text),
@@ -787,6 +843,132 @@ fn section_title(title: &str, hint: &str) -> Div {
 // ---------- страницы ----------
 
 impl Main {
+    /// Своя плашка окна: логотип, статус по центру, кнопки окна. Перетаскивание,
+    /// двойной клик и Snap обрабатывает Windows по зонам `WindowControlArea`.
+    fn title_bar(&self, window: &Window) -> impl IntoElement {
+        let color = self.state_color();
+        let status = if self.busy {
+            self.status.clone()
+        } else if self.running && self.healthy() {
+            "Обход работает".into()
+        } else if self.running {
+            self.title()
+        } else {
+            "Отключено".to_owned()
+        };
+        let pill_bg = if self.busy {
+            c(WARN)
+        } else if self.healthy() {
+            c(OK)
+        } else if self.running {
+            c(ERROR)
+        } else {
+            c(MUTED)
+        }
+        .opacity(0.14);
+        let control = |id: &'static str, glyph: &str, area: WindowControlArea, close: bool| {
+            div()
+                .id(id)
+                .w(px(46.))
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .window_control_area(area)
+                .hover(move |s| {
+                    if close {
+                        s.bg(rgb(0xc42b1c))
+                    } else {
+                        s.bg(c(SURFACE_HOVER))
+                    }
+                })
+                .child(icon(glyph, 16., c(MUTED)))
+        };
+        let maximize = if window.is_maximized() {
+            "window-restore"
+        } else {
+            "window-maximize"
+        };
+        div()
+            .relative()
+            .flex()
+            .flex_none()
+            .h(px(40.))
+            .bg(if self.settings.renat {
+                hsla(0., 0., 0.05, 0.55)
+            } else {
+                c(SIDEBAR)
+            })
+            .border_b_1()
+            .border_color(c(BORDER))
+            .child(
+                div()
+                    .id("drag")
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .pl(px(16.))
+                    .window_control_area(WindowControlArea::Drag)
+                    .child(icon("shield-check", 18., c(ACCENT)))
+                    .child(text("WARP Unblock", 13., TEXT).font_weight(FontWeight::BOLD)),
+            )
+            // Статус строго по центру окна; слой тоже тянет окно, кнопки лежат поверх.
+            .child(
+                div()
+                    .id("drag-center")
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(180.))
+                    .right(px(180.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .window_control_area(WindowControlArea::Drag)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px(px(12.))
+                            .py(px(4.))
+                            .rounded_full()
+                            .bg(pill_bg)
+                            .child(dot(color, 7.))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(if self.running || self.busy {
+                                        color
+                                    } else {
+                                        c(MUTED)
+                                    })
+                                    .max_w(px(320.))
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .child(status),
+                            ),
+                    ),
+            )
+            .child(control(
+                "min",
+                "window-minimize",
+                WindowControlArea::Min,
+                false,
+            ))
+            .child(control("max", maximize, WindowControlArea::Max, false))
+            .child(control(
+                "close",
+                "window-close",
+                WindowControlArea::Close,
+                true,
+            ))
+    }
+
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let accent = self.accent();
         let item = |id: SharedString, glyph: &str, label: &str, active: bool| {
@@ -862,16 +1044,7 @@ impl Main {
             })
             .border_r_1()
             .border_color(c(BORDER))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap_4()
-                    // Щит окрашен цветом состояния: серый, жёлтый, оранжевый/зелёный, красный.
-                    .child(icon("shield-check", 26., self.state_color()))
-                    .child(nav),
-            )
+            .child(div().flex().flex_col().items_center().gap_4().child(nav))
             .child(
                 div()
                     .flex()
@@ -1426,12 +1599,76 @@ impl Main {
             )))
     }
 
+    fn theme_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let accent = self.accent();
+        let mut options = div()
+            .flex()
+            .gap_1()
+            .p(px(3.))
+            .rounded(px(10.))
+            .bg(c(SURFACE_HOVER));
+        for (key, label) in [
+            ("system", "Как в Windows"),
+            ("light", "Светлая"),
+            ("dark", "Тёмная"),
+        ] {
+            let active = self.settings.theme == key;
+            options = options.child(
+                div()
+                    .id(SharedString::from(format!("theme-{key}")))
+                    .px(px(12.))
+                    .h(px(30.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(8.))
+                    .cursor_pointer()
+                    .text_size(px(13.))
+                    .when(active, |s| {
+                        s.bg(c(SURFACE))
+                            .text_color(c(TEXT))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .border_1()
+                            .border_color(accent)
+                    })
+                    .when(!active, |s| {
+                        s.text_color(c(MUTED)).hover(|s| s.text_color(c(TEXT)))
+                    })
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.settings.theme = key.into();
+                        this.save_settings();
+                        this.sync_theme(window, cx);
+                        cx.notify();
+                    })),
+            );
+        }
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_4()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(text("Тема", 15., TEXT))
+                    .child(text(
+                        "«Как в Windows» переключается вместе с системой",
+                        13.,
+                        MUTED,
+                    )),
+            )
+            .child(options)
+    }
+
     fn settings_page(&self, cx: &mut Context<Self>) -> Div {
         let accent = self.accent();
         let files_locked = self.busy || self.running || self.locked();
         let general = card()
             .gap_4()
             .child(text("Общие", 16., TEXT).font_weight(FontWeight::SEMIBOLD))
+            .child(self.theme_picker(cx))
             .child(self.switch_row(
                 "autostart",
                 "Запускать вместе с Windows",
@@ -1839,7 +2076,7 @@ impl Main {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(hsla(0., 0., 0., 0.6))
+                .bg(hsla(0., 0., 0., if light() { 0.35 } else { 0.6 }))
                 .occlude()
                 .child(body.shadow_lg())
                 .into_any_element(),
@@ -1871,7 +2108,7 @@ impl Main {
 }
 
 impl Render for Main {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let page = match self.page {
             Page::Home => self.home(cx),
             Page::Profiles => self.profiles(cx),
@@ -1896,12 +2133,20 @@ impl Render for Main {
             .relative()
             .size_full()
             .flex()
-            .font_family(font())
+            .flex_col()
+            .font_family(FONT)
             .text_color(c(TEXT))
             .bg(c(BACKGROUND))
             .children(self.backdrop())
-            .child(self.sidebar(cx))
-            .child(content)
+            .child(self.title_bar(window))
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.sidebar(cx))
+                    .child(content),
+            )
             .children(modal)
     }
 }
