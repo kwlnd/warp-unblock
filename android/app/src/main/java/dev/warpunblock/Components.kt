@@ -55,6 +55,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -366,17 +367,23 @@ fun PowerButton(ui: UiState, onClick: () -> Unit) {
         else -> Triple(p.border, p.surfaceHover, p.accent)
     }
     // В снимках экранов кольцо не дышит: бесконечная анимация не даёт кадру «успокоиться».
-    val pulse = if (Motion.frozen) 1f else rememberInfiniteTransition(label = "pulse").animateFloat(
+    val pulse = if (Motion.frozen || ui.phase != Phase.BUSY) null else rememberInfiniteTransition(label = "pulse").animateFloat(
         initialValue = 0.25f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(700, easing = LinearEasing), RepeatMode.Reverse),
         label = "halo",
-    ).value
+    )
+    val haloAlpha = when {
+        ui.phase == Phase.BUSY -> 1f
+        healthy -> 0.35f
+        else -> 0.25f
+    }
     Box(Modifier.size(154.dp), contentAlignment = Alignment.Center) {
         Box(
             Modifier
                 .size(154.dp)
-                .alpha(if (ui.phase == Phase.BUSY) pulse else if (healthy) 0.35f else 0.25f)
+                // Прозрачность читается при отрисовке: кольцо дышит без перекомпоновки кнопки.
+                .graphicsLayer { alpha = pulse?.value ?: haloAlpha }
                 .border(2.dp, ring, CircleShape),
         )
         Box(

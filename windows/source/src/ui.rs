@@ -253,6 +253,8 @@ struct Main {
     engine_log: String,
     results: HashMap<usize, Option<u64>>,
     last_tail: Instant,
+    /// Когда окно последний раз перерисовывалось по таймеру (в фоне — не чаще раза в секунду).
+    last_frame: Instant,
     last_health: Option<Instant>,
     tray: Option<tray::Tray>,
     modal: Option<Modal>,
@@ -356,6 +358,7 @@ impl Main {
             engine_log: String::new(),
             results,
             last_tail: Instant::now(),
+            last_frame: Instant::now(),
             last_health: None,
             tray,
             modal: None,
@@ -524,7 +527,9 @@ impl Main {
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_theme(window, cx);
+        let mut changed = false;
         while let Ok(event) = self.worker.rx.try_recv() {
+            changed = true;
             match event {
                 Event::Log(text) => self.log(text),
                 Event::State {
@@ -612,9 +617,13 @@ impl Main {
                 self.start_install(release);
             }
         }
+        // Результаты профилей и хвост лога mihomo нужны только на своих страницах.
         if self.last_tail.elapsed() > Duration::from_secs(1) {
-            self.results = load_results(&self.root);
-            self.engine_log = tail(&self.root.join("data/logs/mihomo.log"));
+            match self.page {
+                Page::Profiles => self.results = load_results(&self.root),
+                Page::Journal => self.engine_log = tail(&self.root.join("data/logs/mihomo.log")),
+                _ => {}
+            }
             self.last_tail = Instant::now();
         }
         if tray::QUIT.swap(false, std::sync::atomic::Ordering::Relaxed) {
@@ -679,7 +688,15 @@ impl Main {
             };
             tray.update(look, tip);
         }
-        cx.notify();
+        // Активное окно перерисовываем каждый тик (анимации), в фоне — при событиях движка
+        // и раз в секунду для таймера работы: так свёрнутое окно почти не ест CPU.
+        if changed
+            || window.is_window_active()
+            || self.last_frame.elapsed() >= Duration::from_secs(1)
+        {
+            self.last_frame = Instant::now();
+            cx.notify();
+        }
     }
 
     fn should_close(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -1181,6 +1198,8 @@ impl Main {
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.page = page;
+                    // Свежие результаты и лог сразу, а не через секунду.
+                    this.last_tail = Instant::now() - Duration::from_secs(2);
                     cx.notify();
                 })),
             );
@@ -1313,18 +1332,14 @@ impl Main {
             .rounded_full()
             .border_2()
             .border_color(ring.opacity(if self.healthy() { 0.35 } else { 0.25 }));
-        // Пока идёт подключение или проверка, внешнее кольцо дышит.
+        // Пока идёт подключение или проверка, внешнее кольцо дышит. Фаза считается от часов,
+        // кадры даёт общий таймер `tick`: бесконечная `with_animation` перерисовывала бы окно
+        // с частотой монитора (и в фоне), это втрое дороже всей главной.
         let halo = if self.busy {
-            halo.with_animation(
-                "power-pulse",
-                Animation::new(Duration::from_millis(1400))
-                    .repeat()
-                    .with_easing(|t| 1.0 - (2.0 * t - 1.0).abs()),
-                |el, t| el.opacity(0.25 + 0.75 * t),
-            )
-            .into_any_element()
+            let phase = (self.started.elapsed().as_secs_f32() / 1.4).fract();
+            halo.opacity(0.25 + 0.75 * (1.0 - (2.0 * phase - 1.0).abs()))
         } else {
-            halo.into_any_element()
+            halo
         };
         div()
             .relative()
