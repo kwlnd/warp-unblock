@@ -266,13 +266,22 @@ class WarpVpnService : VpnService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setSmallIcon(R.drawable.ic_notify)
+            // Цветом знака в шторке обозначается состояние, как в трее Windows.
+            .setColor(stateTint(text))
             .setContentTitle("WARP Unblock")
             .setContentText(text)
             .setContentIntent(open)
             .addAction(0, "Отключить", stop)
             .setOngoing(true)
             .build()
+    }
+
+    /** Цвет состояния по тексту уведомления: подключение, работает, нет связи. */
+    private fun stateTint(text: String): Int = when {
+        text.startsWith("Нет связи") -> 0xFFF2666D.toInt()
+        text.startsWith("Обход работает") -> 0xFFFD8119.toInt()
+        else -> 0xFFF0B429.toInt()
     }
 
     private fun startForegroundCompat(text: String) {

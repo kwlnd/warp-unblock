@@ -211,7 +211,8 @@ internal fun Screen(onToggle: () -> Unit, onAuto: () -> Unit, initialTab: Int = 
                                 modifier = Modifier.size(22.dp).clip(CircleShape),
                             )
                         } else {
-                            Lucide(R.drawable.ic_lucide_shield_check, p.accent, 20.dp)
+                            // Знак «!W», цветом — состояние: серый, жёлтый, оранжевый, красный.
+                            Lucide(R.drawable.ic_logo, if (ui.phase == Phase.CONNECTED && color == p.ok) p.accent else color, 22.dp)
                         }
                         Text("WARP Unblock", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = p.text)
                     }

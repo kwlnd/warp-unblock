@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="WARP Unblock">
+  <rect width="256" height="256" rx="54" fill="#fd8119"/>
+  <g transform="translate(17.4850 12.8000) scale(0.9)">
+    <g fill="#171b23" transform="rotate(-17 36 128)">
+      <path d="M22 79 L47 76.7256 L47 120 L44 149 L23 152 L22 121 L18 84 Z"/>
+      <path d="M25 163 L39 161 L48 169 L44 177 L33 181.72 L22 176 Z"/>
+    </g>
+    <path transform="translate(35 55.75)" fill="#171b23" d="     M14 20 H52     Q54 20 55 23     L75 70 106 37     Q108.5 34 111 37     L140 70 163 22     Q164 20 166 20     H202     Q206 20 204 24     L166.5 107 131 124.5 109 94     Q108 92.5 107 94     L84.5 124.5 H52     Q50.5 124.5 49.5 122     L12.5 24     Q11 20 14 20     Z"/>
+  </g>
+</svg>

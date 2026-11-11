@@ -67,6 +67,12 @@ gpui_kit::assets::icon_assets!(
 struct AppAssets;
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        // Знак «!W» (tools/make-icons.py): красится, как иконки Lucide, в цвет текста.
+        if path == "icons/warp-mark.svg" {
+            return Ok(Some(std::borrow::Cow::Borrowed(include_bytes!(
+                "../assets/icons/warp-mark.svg"
+            ))));
+        }
         if let Some(bytes) = ExtraIcons.load(path)? {
             return Ok(Some(bytes));
         }
@@ -470,6 +476,19 @@ impl Main {
             c(WARN)
         } else if self.healthy() {
             c(OK)
+        } else if self.running {
+            c(ERROR)
+        } else {
+            c(MUTED)
+        }
+    }
+
+    /// Цвет знака «!W» в шапке — как в трее: выкл, подключение, работает, ошибка.
+    fn mark_color(&self) -> Hsla {
+        if self.busy {
+            c(WARN)
+        } else if self.healthy() {
+            self.accent()
         } else if self.running {
             c(ERROR)
         } else {
@@ -1101,7 +1120,8 @@ impl Main {
                             .rounded_full()
                             .object_fit(ObjectFit::Cover)
                             .into_any_element(),
-                        None => icon("shield-check", 18., c(ACCENT)).into_any_element(),
+                        // Знак «!W», цветом — состояние, как в трее.
+                        None => icon("warp-mark", 20., self.mark_color()).into_any_element(),
                     })
                     .child(text("WARP Unblock", 13., TEXT).font_weight(FontWeight::BOLD)),
             )

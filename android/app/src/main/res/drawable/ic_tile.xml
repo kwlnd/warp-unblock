@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Плитка в шторке: щит с галочкой (Lucide, ISC) -->
+<!-- W для плитки в быстрых настройках. Сгенерировано tools/make-icons.py из warp-w.svg — не править руками. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
-    <path android:pathData="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" android:fillColor="#00000000" android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="2" android:strokeLineCap="round" android:strokeLineJoin="round" />
-    <path android:pathData="m9 12 2 2 4-4" android:fillColor="#00000000" android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="2" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M2.21 6.58 L6.15 6.58 L6.18 6.58 L6.20 6.58 L6.23 6.59 L6.25 6.60 L6.27 6.61 L6.29 6.62 L6.31 6.64 L6.33 6.65 L6.35 6.67 L6.37 6.70 L6.39 6.72 L6.41 6.75 L6.42 6.78 L6.44 6.81 L6.45 6.85 L6.46 6.89 L8.54 11.77 L11.76 8.34 L11.79 8.30 L11.82 8.27 L11.86 8.25 L11.89 8.22 L11.92 8.21 L11.95 8.19 L11.98 8.19 L12.02 8.19 L12.05 8.19 L12.08 8.19 L12.11 8.21 L12.15 8.22 L12.18 8.25 L12.21 8.27 L12.24 8.30 L12.28 8.34 L15.29 11.77 L17.67 6.78 L17.69 6.76 L17.70 6.73 L17.72 6.71 L17.73 6.69 L17.75 6.67 L17.77 6.66 L17.79 6.64 L17.80 6.63 L17.82 6.62 L17.85 6.61 L17.87 6.60 L17.89 6.59 L17.91 6.58 L17.94 6.58 L17.96 6.58 L17.99 6.58 L21.72 6.58 L21.77 6.58 L21.82 6.58 L21.86 6.59 L21.89 6.60 L21.92 6.62 L21.95 6.63 L21.97 6.66 L21.98 6.68 L21.99 6.71 L22.00 6.74 L22.00 6.77 L22.00 6.81 L21.99 6.85 L21.97 6.89 L21.95 6.94 L21.93 6.99 L18.04 15.61 L14.35 17.42 L12.07 14.26 L12.06 14.24 L12.04 14.22 L12.03 14.21 L12.02 14.20 L12.00 14.19 L11.99 14.18 L11.98 14.18 L11.97 14.18 L11.95 14.18 L11.94 14.18 L11.93 14.19 L11.91 14.20 L11.90 14.21 L11.89 14.22 L11.87 14.24 L11.86 14.26 L9.53 17.42 L6.15 17.42 L6.13 17.42 L6.11 17.42 L6.10 17.41 L6.08 17.41 L6.06 17.40 L6.04 17.39 L6.03 17.37 L6.01 17.36 L5.99 17.34 L5.98 17.32 L5.96 17.30 L5.95 17.28 L5.93 17.25 L5.92 17.23 L5.91 17.20 L5.89 17.16 L2.05 6.99 L2.03 6.94 L2.02 6.89 L2.01 6.85 L2.00 6.81 L2.00 6.77 L2.00 6.74 L2.00 6.71 L2.01 6.68 L2.02 6.66 L2.04 6.63 L2.06 6.62 L2.08 6.60 L2.11 6.59 L2.14 6.58 L2.17 6.58 L2.21 6.58 Z" />
 </vector>
