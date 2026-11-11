@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="warp-w-orange.svg" width="112" alt="WARP Unblock">
+<img src="branding/warp-w-orange.svg" width="112" alt="WARP Unblock">
 
 # WARP Unblock
 

@@ -56,6 +56,23 @@ jobs:
           sha256sum *.zip *.apk > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      # Подпись Ed25519 списка сумм: программы ставят обновление, только если подпись сходится с
+      # вшитым публичным ключом — подменённый файл не пройдёт, откуда бы его ни скачали.
+      - name: Подписать контрольные суммы
+        env:
+          KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -e
+          test -n "$KEY" || { echo "Нет секрета UPDATE_SIGNING_KEY"; exit 1; }
+          cd dist
+          umask 077
+          echo "$KEY" > "$RUNNER_TEMP/key.pem"
+          openssl pkeyutl -sign -inkey "$RUNNER_TEMP/key.pem" -rawin -in SHA256SUMS.txt -out sig.bin
+          rm -f "$RUNNER_TEMP/key.pem"
+          base64 -w0 sig.bin > SHA256SUMS.txt.sig
+          rm sig.bin
+          test "$(base64 -d SHA256SUMS.txt.sig | wc -c)" = 64
+
       - name: Опубликовать релиз
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,6 +83,6 @@ jobs:
 
           **Android 7.0+:** `arm64-v8a` — почти все телефоны, `universal` — ТВ-приставки, 32-битные системы и если не знаете, что выбрать. Ставится поверх прошлой версии.
 
-          Контрольные суммы всех файлов — `SHA256SUMS.txt`.
+          Контрольные суммы всех файлов — `SHA256SUMS.txt`, подпись — `SHA256SUMS.txt.sig` (Ed25519, программы проверяют её сами).
           EOF
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --title "WARP Unblock $TAG" --notes-file notes.md --target "$GITHUB_SHA"

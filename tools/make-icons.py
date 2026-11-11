@@ -1,4 +1,4 @@
-"""Иконки WARP Unblock из твоих SVG в корне репозитория.
+"""Иконки WARP Unblock из SVG в папке branding/.
 
 Знак «!W» — из `warp-w-orange.svg` (берутся фигуры со всеми трансформациями, плитка-rect
 отбрасывается), одна W — из `warp-w.svg`. Минимализм: знак без подложки и эффектов, цветом
@@ -26,8 +26,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
-MARK = ROOT / "warp-w-orange.svg"
-LETTER = ROOT / "warp-w.svg"
+MARK = ROOT / "branding" / "warp-w-orange.svg"
+LETTER = ROOT / "branding" / "warp-w.svg"
 WIN = ROOT / "windows" / "source" / "assets" / "icons"
 RES = ROOT / "android" / "app" / "src" / "main" / "res"
 ORANGE = "#FD8119"

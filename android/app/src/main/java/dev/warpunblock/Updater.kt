@@ -7,8 +7,15 @@ import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import org.json.JSONArray
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
+import org.bouncycastle.util.encoders.Base64
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.Socket
 import java.net.URL
 import java.security.MessageDigest
 
@@ -22,6 +29,8 @@ data class AndroidRelease(
     val apkUrl: String,
     val size: Long,
     val sumsUrl: String?,
+    /** Подпись Ed25519 файла SHA256SUMS.txt; без неё установка отменяется. */
+    val sigUrl: String? = null,
 )
 
 internal fun stableVersion(tag: String): List<Int>? {
@@ -82,9 +91,11 @@ object Updater {
                     }
                 }
             }
+            var sig: String? = null
             for (j in 0 until assets.length()) {
                 val asset = assets.getJSONObject(j)
                 if (asset.optString("name") == "SHA256SUMS.txt") sums = asset.optString("browser_download_url")
+                if (asset.optString("name") == "SHA256SUMS.txt.sig") sig = asset.optString("browser_download_url")
             }
             val (name, url, size) = apk ?: continue
             best = version to AndroidRelease(
@@ -96,13 +107,56 @@ object Updater {
                 apkUrl = url,
                 size = size,
                 sumsUrl = sums,
+                sigUrl = sig,
             )
         }
         return best?.second
     }
 
-    private fun open(url: String, timeout: Int = 15_000): HttpURLConnection =
-        (URL(url).openConnection() as HttpURLConnection).apply {
+    /** Публичный ключ Ed25519 подписи обновлений (секретный — в секретах CI, `UPDATE_SIGNING_KEY`). */
+    private const val UPDATE_KEY = "gwjccy9ryFjmeGN6zMYamhwpoOWzMvNI+JYL/xF85yc="
+
+    /** Подпись Ed25519 (base64) над точными байтами списка сумм. */
+    internal fun verifySignature(publicKey: ByteArray, message: ByteArray, signature: String): Boolean = runCatching {
+        val signer = Ed25519Signer()
+        signer.init(false, Ed25519PublicKeyParameters(publicKey, 0))
+        signer.update(message, 0, message.size)
+        signer.verifySignature(Base64.decode(signature.trim()))
+    }.getOrDefault(false)
+
+    /** Вход ядра, весь трафик которого идёт через WARP; слушает, только пока подключено. */
+    private val warp = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", Core.WARP_INPUT_PORT))
+
+    private fun warpAvailable(): Boolean = runCatching {
+        Socket().use { it.connect(InetSocketAddress("127.0.0.1", Core.WARP_INPUT_PORT), 300) }
+    }.isSuccess
+
+    /**
+     * Сначала напрямую; при ошибке — через WARP, если подключение активно. Приложение исключено
+     * из своего VPN, поэтому без этого обновление шло бы только мимо туннеля.
+     */
+    private fun <T> withFallback(block: (Proxy) -> T): T = try {
+        block(Proxy.NO_PROXY)
+    } catch (direct: Exception) {
+        if (direct !is IOException && direct !is IllegalStateException) throw direct
+        if (!warpAvailable()) throw direct
+        try {
+            block(warp)
+        } catch (viaWarp: Exception) {
+            throw IOException("Напрямую: ${direct.message}; через WARP: ${viaWarp.message}", viaWarp)
+        }
+    }
+
+    private fun readBytes(url: String, proxy: Proxy): ByteArray {
+        val c = open(url, proxy = proxy)
+        try {
+            check(c.responseCode == 200) { "HTTP ${c.responseCode}" }
+            return c.inputStream.use { it.readBytes() }
+        } finally { c.disconnect() }
+    }
+
+    private fun open(url: String, timeout: Int = 15_000, proxy: Proxy = Proxy.NO_PROXY): HttpURLConnection =
+        (URL(url).openConnection(proxy) as HttpURLConnection).apply {
             connectTimeout = 10_000
             readTimeout = timeout
             setRequestProperty("User-Agent", "warp-unblock-android")
@@ -113,11 +167,7 @@ object Updater {
     fun check(): AndroidRelease? {
         var best: AndroidRelease? = null
         for (page in 1..10) {
-            val connection = open(API + page)
-            val releases = try {
-                check(connection.responseCode == 200) { "GitHub: HTTP ${connection.responseCode}" }
-                JSONArray(connection.inputStream.bufferedReader().use { it.readText() })
-            } finally { connection.disconnect() }
+            val releases = JSONArray(String(withFallback { readBytes(API + page, it) }, Charsets.UTF_8))
             val found = pick(releases, abis(), BuildConfig.VERSION_NAME)
             if (found != null && (best == null ||
                     compareVersion(stableVersion(found.version)!!, stableVersion(best.version)!!) > 0)) best = found
@@ -133,18 +183,24 @@ object Updater {
             ?.get(0)?.lowercase()
             ?.takeIf { Regex("[0-9a-f]{64}").matches(it) }
 
-    /** Скачивает APK в кэш и сверяет SHA-256 по SHA256SUMS.txt релиза. */
+    /** Скачивает APK в кэш: сначала подпись SHA256SUMS.txt, затем SHA-256 файла по подписанному списку. */
     fun download(context: Context, release: AndroidRelease, progress: (Long, Long) -> Unit): File {
         val sumsUrl = release.sumsUrl ?: error("У релиза нет SHA256SUMS.txt — установка отменена")
-        val sums = open(sumsUrl).let { c ->
-            try { check(c.responseCode == 200) { "SHA256SUMS: HTTP ${c.responseCode}" }; c.inputStream.bufferedReader().use { it.readText() } }
-            finally { c.disconnect() }
+        val sigUrl = release.sigUrl ?: error("У релиза нет подписи контрольных сумм — установка отменена")
+        val sums = withFallback { readBytes(sumsUrl, it) }
+        val signature = String(withFallback { readBytes(sigUrl, it) }, Charsets.UTF_8)
+        check(verifySignature(Base64.decode(UPDATE_KEY), sums, signature)) {
+            "Подпись обновления не сошлась — файл подменён, установка отменена"
         }
-        val expected = expectedSum(sums, release.apkName) ?: error("Нет контрольной суммы для ${release.apkName}")
+        val expected = expectedSum(String(sums, Charsets.UTF_8), release.apkName) ?: error("Нет контрольной суммы для ${release.apkName}")
+        return withFallback { proxy -> fetchApk(context, release, expected, proxy, progress) }
+    }
+
+    private fun fetchApk(context: Context, release: AndroidRelease, expected: String, proxy: Proxy, progress: (Long, Long) -> Unit): File {
         val dir = File(context.cacheDir, "updates").apply { deleteRecursively(); mkdirs() }
         val file = File(dir, release.apkName)
         val digest = MessageDigest.getInstance("SHA-256")
-        val connection = open(release.apkUrl, timeout = 60_000)
+        val connection = open(release.apkUrl, timeout = 60_000, proxy = proxy)
         try {
             check(connection.responseCode == 200) { "APK: HTTP ${connection.responseCode}" }
             val total = connection.contentLengthLong.takeIf { it > 0 } ?: release.size

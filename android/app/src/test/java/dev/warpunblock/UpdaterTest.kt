@@ -37,6 +37,27 @@ class UpdaterTest {
         assertNull(Updater.pick(list, listOf("x86_64"), "0.3.1"))
     }
 
+    @Test fun signatureMustMatchTheExactSums() {
+        val generator = org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator()
+        generator.init(org.bouncycastle.crypto.params.Ed25519KeyGenerationParameters(java.security.SecureRandom()))
+        val pair = generator.generateKeyPair()
+        val public = (pair.public as org.bouncycastle.crypto.params.Ed25519PublicKeyParameters).encoded
+        val sums = "0123abcd  WarpUnblock-android-v1.0.0-arm64-v8a.apk\n".toByteArray()
+        val signer = org.bouncycastle.crypto.signers.Ed25519Signer()
+        signer.init(true, pair.private)
+        signer.update(sums, 0, sums.size)
+        val sig = org.bouncycastle.util.encoders.Base64.toBase64String(signer.generateSignature())
+        assertTrue(Updater.verifySignature(public, sums, sig))
+        assertFalse(Updater.verifySignature(public, "0123abce  x.apk\n".toByteArray(), sig))
+        assertFalse(Updater.verifySignature(public, sums, "не base64"))
+        assertFalse(Updater.verifySignature(ByteArray(32), sums, sig))
+    }
+
+    @Test fun pickFindsTheSignature() {
+        val list = JSONArray(listOf(release("v0.7.6", listOf("WarpUnblock-android-v0.7.6-arm64-v8a.apk", "SHA256SUMS.txt", "SHA256SUMS.txt.sig"))))
+        assertEquals("https://dl/SHA256SUMS.txt.sig", Updater.pick(list, listOf("arm64-v8a"), "0.7.5")!!.sigUrl)
+    }
+
     @Test fun thirtyTwoBitDevicesGetUniversalOnceV7aIsGone() {
         val list = JSONArray(listOf(
             release("v0.7.5", apks("0.7.5")),

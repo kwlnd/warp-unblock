@@ -1,5 +1,7 @@
-//! Обновление из GitHub Releases: поиск свежего `v*`, загрузка ZIP, проверка SHA-256,
-//! замена файлов рядом с exe и перезапуск. Данные (`data/`) и свои списки доменов не трогаются.
+//! Обновление из GitHub Releases: поиск свежего `v*`, загрузка ZIP, проверка подписи Ed25519
+//! списка сумм `SHA256SUMS.txt` и SHA-256 архива, замена файлов рядом с exe и перезапуск.
+//! Данные (`data/`) и свои списки доменов не трогаются. Если GitHub напрямую не отвечает, а
+//! подключение активно, запросы повторяются через WARP (вход ядра `opera-underlay`, 17892).
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::{
@@ -17,6 +19,10 @@ const KEEP: [&str; 3] = [
     "app/config/lists/ai-domains.txt",
 ];
 const MAX_DOWNLOAD: u64 = 300 * 1024 * 1024;
+/// Публичный ключ Ed25519 подписи обновлений (секретный — в секретах CI, `UPDATE_SIGNING_KEY`).
+const UPDATE_KEY: &str = "gwjccy9ryFjmeGN6zMYamhwpoOWzMvNI+JYL/xF85yc=";
+/// Вход ядра mihomo, весь трафик которого идёт через WARP (`opera-underlay` в config.yaml).
+const WARP_INPUT: &str = "127.0.0.1:17892";
 const EXE: &str = "WarpUnblock.exe";
 
 pub const VERSION: &str = match option_env!("WARP_VERSION") {
@@ -37,7 +43,9 @@ pub struct Release {
     pub notes: String,
     pub page: String,
     pub zip: Asset,
-    pub sha: Option<Asset>,
+    /// `SHA256SUMS.txt` и его подпись `SHA256SUMS.txt.sig`; без них установка отменяется.
+    pub sums: Option<Asset>,
+    pub sig: Option<Asset>,
 }
 
 pub fn version(tag: &str) -> Option<[u64; 3]> {
@@ -53,6 +61,57 @@ fn client(timeout: u64) -> Result<reqwest::blocking::Client> {
         .timeout(Duration::from_secs(timeout))
         .user_agent("warp-unblock")
         .build()?)
+}
+
+/// Клиент через WARP, если подключение активно и вход ядра слушает; иначе None.
+fn warp_client(timeout: u64) -> Option<reqwest::blocking::Client> {
+    let address = WARP_INPUT.parse().ok()?;
+    std::net::TcpStream::connect_timeout(&address, Duration::from_millis(300)).ok()?;
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(timeout))
+        .user_agent("warp-unblock")
+        .proxy(reqwest::Proxy::all(format!("http://{WARP_INPUT}")).ok()?)
+        .build()
+        .ok()
+}
+
+/// Сначала напрямую; при ошибке — ещё раз через WARP, если подключение активно.
+fn with_fallback<T>(
+    timeout: u64,
+    request: impl Fn(&reqwest::blocking::Client) -> Result<T>,
+) -> Result<T> {
+    match request(&client(timeout)?) {
+        Ok(value) => Ok(value),
+        Err(direct) => match warp_client(timeout) {
+            Some(warp) => request(&warp)
+                .with_context(|| format!("напрямую: {direct:#}; через WARP тоже не вышло")),
+            None => Err(direct),
+        },
+    }
+}
+
+/// Подпись Ed25519 (base64) над точными байтами списка сумм.
+fn verify_signature(public_key: &[u8], message: &[u8], signature_b64: &str) -> bool {
+    use base64::Engine;
+    let Ok(signature) = base64::engine::general_purpose::STANDARD.decode(signature_b64.trim())
+    else {
+        return false;
+    };
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public_key)
+        .verify(message, &signature)
+        .is_ok()
+}
+
+/// Ожидаемый SHA-256 файла из `SHA256SUMS.txt` (формат `sha256sum`).
+fn expected_sum(sums: &str, name: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let (hash, file) = line.trim().split_once(char::is_whitespace)?;
+        let hash = hash.to_ascii_lowercase();
+        (file.trim().trim_start_matches('*') == name
+            && hash.len() == 64
+            && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then_some(hash)
+    })
 }
 
 fn asset(item: &serde_json::Value) -> Option<Asset> {
@@ -81,9 +140,10 @@ fn pick(items: &[serde_json::Value]) -> Option<([u64; 3], Release)> {
                 .iter()
                 .find(|a| a.name.ends_with("-win-x64.zip"))?
                 .clone();
-            let sha = assets
+            let sums = assets.iter().find(|a| a.name == "SHA256SUMS.txt").cloned();
+            let sig = assets
                 .iter()
-                .find(|a| a.name == format!("{}.sha256", zip.name))
+                .find(|a| a.name == "SHA256SUMS.txt.sig")
                 .cloned();
             Some((
                 parsed,
@@ -92,7 +152,8 @@ fn pick(items: &[serde_json::Value]) -> Option<([u64; 3], Release)> {
                     notes: item["body"].as_str().unwrap_or("").trim().to_owned(),
                     page: item["html_url"].as_str().unwrap_or("").to_owned(),
                     zip,
-                    sha,
+                    sums,
+                    sig,
                 },
             ))
         })
@@ -101,16 +162,17 @@ fn pick(items: &[serde_json::Value]) -> Option<([u64; 3], Release)> {
 
 /// Some — доступна более новая версия, None — текущая актуальна.
 pub fn check() -> Result<Option<Release>> {
-    let client = client(15)?;
     let mut best: Option<([u64; 3], Release)> = None;
     for page in 1..=10 {
-        let items: Vec<serde_json::Value> = client
-            .get(format!(
-                "https://api.github.com/repos/{REPO}/releases?per_page=100&page={page}"
-            ))
-            .send()?
-            .error_for_status()?
-            .json()?;
+        let items: Vec<serde_json::Value> = with_fallback(15, |client| {
+            Ok(client
+                .get(format!(
+                    "https://api.github.com/repos/{REPO}/releases?per_page=100&page={page}"
+                ))
+                .send()?
+                .error_for_status()?
+                .json()?)
+        })?;
         if let Some(found) = pick(&items) {
             if best.as_ref().is_none_or(|(v, _)| found.0 > *v) {
                 best = Some(found);
@@ -260,30 +322,41 @@ pub enum Step {
 
 /// Скачивает, проверяет и ставит релиз. Соединение должно быть остановлено заранее.
 pub fn install(root: &Path, release: &Release, progress: &dyn Fn(Step)) -> Result<usize> {
-    let sha = release
-        .sha
-        .as_ref()
-        .context("У релиза нет контрольной суммы — установка отменена")?;
+    let (Some(sums), Some(sig)) = (&release.sums, &release.sig) else {
+        bail!("У релиза нет подписанных контрольных сумм — установка отменена");
+    };
+    // Сначала подпись: дальше доверяем только подписанному списку сумм.
+    let text = |url: &str| -> Result<Vec<u8>> {
+        with_fallback(30, |client| {
+            Ok(client
+                .get(url)
+                .send()?
+                .error_for_status()?
+                .bytes()?
+                .to_vec())
+        })
+    };
+    let sums_bytes = text(&sums.url)?;
+    let sig_text = String::from_utf8(text(&sig.url)?).unwrap_or_default();
+    use base64::Engine;
+    let key = base64::engine::general_purpose::STANDARD.decode(UPDATE_KEY)?;
+    if !verify_signature(&key, &sums_bytes, &sig_text) {
+        bail!("Подпись обновления не сошлась — файл подменён, установка отменена");
+    }
+    let expected = expected_sum(&String::from_utf8_lossy(&sums_bytes), &release.zip.name)
+        .context("В подписанном списке нет суммы архива")?;
     let work = root.join("data/update");
     let _ = fs::remove_dir_all(&work);
     let staging = work.join("staging");
     fs::create_dir_all(&staging)?;
-    let client = client(600)?;
     let zip = work.join(&release.zip.name);
-    download(&client, &release.zip.url, &zip, &|done, total| {
-        progress(Step::Download(done, total.max(release.zip.size)))
+    with_fallback(600, |client| {
+        download(client, &release.zip.url, &zip, &|done, total| {
+            progress(Step::Download(done, total.max(release.zip.size)))
+        })
     })?;
     progress(Step::Verify);
-    let expected = client
-        .get(&sha.url)
-        .send()?
-        .error_for_status()?
-        .text()?
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if expected.len() != 64 || sha256(&zip)? != expected {
+    if sha256(&zip)? != expected {
         bail!("Контрольная сумма не совпала — файл повреждён или подменён");
     }
     progress(Step::Install);
@@ -363,6 +436,8 @@ mod tests {
                 &[
                     "WarpUnblock-v0.6.0-win-x64.zip",
                     "WarpUnblock-v0.6.0-win-x64.zip.sha256",
+                    "SHA256SUMS.txt",
+                    "SHA256SUMS.txt.sig",
                 ],
             ),
             release("v0.7.0", false, false, &["other.txt"]),
@@ -370,7 +445,8 @@ mod tests {
         let (v, r) = pick(&items).unwrap();
         assert_eq!(v, [0, 6, 0]);
         assert_eq!(r.zip.name, "WarpUnblock-v0.6.0-win-x64.zip");
-        assert_eq!(r.sha.unwrap().name, "WarpUnblock-v0.6.0-win-x64.zip.sha256");
+        assert_eq!(r.sums.unwrap().name, "SHA256SUMS.txt");
+        assert_eq!(r.sig.unwrap().name, "SHA256SUMS.txt.sig");
     }
 
     #[test]
@@ -437,23 +513,59 @@ mod tests {
         fs::create_dir_all(work.join("staging")).unwrap();
         let zip = work.join(&release.zip.name);
         download(&client, &release.zip.url, &zip, &|_, _| {}).unwrap();
-        let expected = client
-            .get(&release.sha.unwrap().url)
+        // Релизы до v0.7.6 ещё без подписи: проверяем подпись, только если она есть.
+        let sums = client
+            .get(&release.sums.as_ref().unwrap().url)
             .send()
             .unwrap()
-            .text()
+            .bytes()
             .unwrap();
-        assert_eq!(
-            sha256(&zip).unwrap(),
-            expected
-                .split_whitespace()
-                .next()
-                .unwrap()
-                .to_ascii_lowercase()
-        );
+        if let Some(sig) = &release.sig {
+            use base64::Engine;
+            let key = base64::engine::general_purpose::STANDARD
+                .decode(UPDATE_KEY)
+                .unwrap();
+            let sig = client.get(&sig.url).send().unwrap().text().unwrap();
+            assert!(verify_signature(&key, &sums, &sig));
+        }
+        let expected = expected_sum(&String::from_utf8_lossy(&sums), &release.zip.name).unwrap();
+        assert_eq!(sha256(&zip).unwrap(), expected);
         let files = extract(&zip, &work.join("staging")).unwrap();
         assert!(files.iter().any(|f| f.starts_with("app")));
         fs::remove_dir_all(work).unwrap();
+    }
+
+    #[test]
+    fn signature_must_match_the_exact_sums() {
+        use base64::Engine;
+        use ring::signature::KeyPair;
+        let rng = ring::rand::SystemRandom::new();
+        let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let sums = b"0123abcd  WarpUnblock-v1.0.0-win-x64.zip\n";
+        let sig = base64::engine::general_purpose::STANDARD.encode(pair.sign(sums).as_ref());
+        let public = pair.public_key().as_ref();
+        assert!(verify_signature(public, sums, &sig));
+        assert!(!verify_signature(
+            public,
+            b"0123abce  WarpUnblock-v1.0.0-win-x64.zip\n",
+            &sig
+        ));
+        assert!(!verify_signature(public, sums, "не base64"));
+        let ours = base64::engine::general_purpose::STANDARD
+            .decode(UPDATE_KEY)
+            .unwrap();
+        assert_eq!(ours.len(), 32);
+        assert!(!verify_signature(&ours, sums, &sig));
+    }
+
+    #[test]
+    fn expected_sum_reads_sha256sum_format() {
+        let sums = format!("{}  a.zip\n{} *b.apk\n", "A".repeat(64), "b".repeat(64));
+        assert_eq!(expected_sum(&sums, "a.zip"), Some("a".repeat(64)));
+        assert_eq!(expected_sum(&sums, "b.apk"), Some("b".repeat(64)));
+        assert_eq!(expected_sum(&sums, "c.zip"), None);
+        assert_eq!(expected_sum("xyz  a.zip", "a.zip"), None);
     }
 
     #[test]

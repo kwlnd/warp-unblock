@@ -14,6 +14,8 @@ rfd = "0.15"
 qrcode = { version = "0.14", default-features = false }
 base64 = "0.22"
 sha2 = "0.10"
+# Проверка подписи обновлений (Ed25519); та же версия уже приходит через rustls.
+ring = "0.17"
 # Та же 0.25, что у GPUI: иконка окна передаётся как image::RgbaImage.
 image = { version = "0.25", default-features = false, features = ["png"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }

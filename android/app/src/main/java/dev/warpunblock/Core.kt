@@ -70,7 +70,7 @@ class Core(private val context: Context) {
         check(binary.isFile) { "Нет ядра mihomo (${binary.name}) для этой архитектуры" }
         // Если порт держит другое приложение (FlClash и т.п.), mihomo пишет ошибку и работает
         // дальше: API отвечает, WARP проверяется, а трафик TUN уходит в чужой прокси.
-        for (port in if (test) listOf(TEST_PROXY_PORT, TEST_API_PORT) else listOf(PROXY_PORT, API_PORT)) {
+        for (port in if (test) listOf(TEST_PROXY_PORT, TEST_API_PORT) else listOf(PROXY_PORT, API_PORT, WARP_INPUT_PORT)) {
             check(portFree(port)) { "Порт $port занят другим приложением. Закройте другой VPN или прокси (например, FlClash) и подключитесь снова." }
         }
         val log = File(home, if (test) "mihomo-test.log" else "mihomo.log")
@@ -117,5 +117,7 @@ class Core(private val context: Context) {
         const val API_PORT = 9090
         const val TEST_PROXY_PORT = 5631
         const val TEST_API_PORT = 9091
+        /** Вход ядра, весь трафик которого идёт через WARP (`listeners` в config.yaml). */
+        const val WARP_INPUT_PORT = 17892
     }
 }
