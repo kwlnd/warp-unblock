@@ -77,9 +77,14 @@ class Core(private val context: Context) {
             .logged(log)
     }
 
-    /** Ждёт ответа WARP через delay-тест ядра. Возвращает задержку в мс или null по таймауту. */
-    fun waitDelay(apiPort: Int, timeoutSeconds: Int, alive: () -> Boolean): Int? =
-        WarpProbe.waitDelay(apiPort, timeoutSeconds * 1000L, alive)
+    /**
+     * Сначала ждёт, пока ядро поднимет API, затем отдельно [budgetMillis] на ответ WARP
+     * через delay-тест. Возвращает задержку в мс или null.
+     */
+    fun waitDelay(apiPort: Int, budgetMillis: Long, alive: () -> Boolean): Int? {
+        if (!WarpProbe.waitReady(apiPort, WarpProbe.READY_TIMEOUT_MS, alive)) return null
+        return WarpProbe.waitDelay(apiPort, budgetMillis, alive)
+    }
 
     fun logTail(lines: Int = 40): String {
         val file = File(home, "mihomo.log")

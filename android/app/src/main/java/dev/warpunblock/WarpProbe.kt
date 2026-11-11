@@ -9,6 +9,40 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** A single monotonic budget covers startup retries, connect, headers and response body. */
 internal object WarpProbe {
+    /** Ответ WARP при подключении: одна полная попытка рукопожатия WireGuard (wireguard-go повторяет раз в 5 с). */
+    const val CONNECT_BUDGET_MS = 5_000L
+    /** Ответ WARP при подборе: рабочий профиль отвечает за 0,2–0,9 с. */
+    const val PICK_BUDGET_MIN_MS = 1_500L
+    /** Сколько ждать, пока ядро поднимет API: это запуск программы, а не ответ WARP. */
+    const val READY_TIMEOUT_MS = 3_000L
+
+    /** 1,5 с, а на медленной сети — 2,5× от лучшей средней задержки из истории, не больше 5 с. */
+    fun pickBudget(stats: Collection<ProfileStat>): Long {
+        val fastest = stats.filter { it.successes > 0 }.minOfOrNull { it.totalMs / it.successes }
+            ?: return PICK_BUDGET_MIN_MS
+        return (fastest * 5 / 2).coerceIn(PICK_BUDGET_MIN_MS, CONNECT_BUDGET_MS)
+    }
+
+    /** Ждёт, пока API ядра ответит на /version. */
+    fun waitReady(apiPort: Int, timeoutMillis: Long, alive: () -> Boolean): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        while (System.nanoTime() < deadline && alive()) {
+            val connection = URL("http://127.0.0.1:$apiPort/version").openConnection() as HttpURLConnection
+            val up = try {
+                connection.connectTimeout = 300
+                connection.readTimeout = 300
+                connection.responseCode == 200
+            } catch (_: Exception) {
+                false
+            } finally {
+                connection.disconnect()
+            }
+            if (up) return true
+            Thread.sleep(50)
+        }
+        return false
+    }
+
     fun waitDelay(apiPort: Int, timeoutMillis: Long, alive: () -> Boolean): Int? {
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
         val active = AtomicReference<HttpURLConnection?>()

@@ -17,16 +17,64 @@ use std::{
 
 const STAGES: usize = 5;
 
-fn probe_delay(port: u16, timeout: Duration, check: impl Fn() -> Result<()>) -> Result<u64> {
-    let deadline = Instant::now() + timeout;
+/// Сколько ждать, пока mihomo поднимет API: это запуск программы, а не ответ WARP.
+const READY_TIMEOUT: Duration = Duration::from_secs(3);
+/// Ответ WARP при подключении и «Тесте профиля»: одна полная попытка рукопожатия WireGuard.
+pub const CONNECT_BUDGET: Duration = Duration::from_secs(5);
+/// Ответ WARP при подборе: рабочий профиль отвечает за 0,2–0,9 с.
+const PICK_BUDGET_MIN: Duration = Duration::from_millis(1500);
+
+/// Бюджет на ответ WARP при подборе: 1,5 с, а на медленной сети — 2,5× от лучшей средней
+/// задержки из истории успешных проверок, но не больше полной попытки рукопожатия.
+pub fn pick_budget(root: &Path) -> Duration {
+    let fastest = crate::features::stats(root)
+        .values()
+        .filter(|s| s.successes > 0)
+        .map(|s| s.total_ms / s.successes)
+        .min();
+    match fastest {
+        Some(ms) => Duration::from_millis(ms * 5 / 2).clamp(PICK_BUDGET_MIN, CONNECT_BUDGET),
+        None => PICK_BUDGET_MIN,
+    }
+}
+
+/// Сначала ждёт API mihomo (до [`READY_TIMEOUT`]), затем отдельно отмеряет `budget` на
+/// ответ WARP через delay-тест ядра.
+fn probe_delay(
+    port: u16,
+    ready: Duration,
+    budget: Duration,
+    check: impl Fn() -> Result<()>,
+) -> Result<u64> {
     let client = reqwest::blocking::Client::builder().no_proxy().build()?;
+    let ready_deadline = Instant::now() + ready;
+    loop {
+        check()?;
+        let remaining = ready_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!(
+                "mihomo не запустился за {} с; см. mihomo.log",
+                ready.as_secs_f32()
+            );
+        }
+        let up = client
+            .get(format!("http://127.0.0.1:{port}/version"))
+            .timeout(remaining.min(Duration::from_millis(300)))
+            .send()
+            .is_ok_and(|r| r.status().is_success());
+        if up {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50).min(remaining));
+    }
+    let deadline = Instant::now() + budget;
     loop {
         check()?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             break;
         }
-        let kernel_ms = remaining.as_millis().saturating_sub(100).max(1).to_string();
+        let kernel_ms = remaining.as_millis().saturating_sub(50).max(1).to_string();
         let response = client
             .get(format!("http://127.0.0.1:{port}/proxies/WARP/delay"))
             .timeout(remaining)
@@ -50,12 +98,79 @@ fn probe_delay(port: u16, timeout: Duration, check: impl Fn() -> Result<()>) -> 
         if remaining.is_zero() {
             break;
         }
-        thread::sleep(Duration::from_millis(100).min(remaining));
+        thread::sleep(Duration::from_millis(50).min(remaining));
     }
     bail!(
         "WARP не ответил за {} с. Попробуйте другую стратегию.",
-        timeout.as_secs_f32()
+        budget.as_secs_f32()
     )
+}
+
+/// Пишет data/mihomo/warp.yaml для профиля без PowerShell, если аккаунт и reserved уже есть.
+/// false — нужен warp.ps1 (регистрация аккаунта или первое получение reserved).
+fn write_profile(root: &Path, profile: &strategies::Strategy) -> Result<bool> {
+    let warp = root.join("data/warp");
+    let (Ok(conf), Ok(reserved)) = (
+        fs::read_to_string(warp.join("wgcf-profile.conf")),
+        fs::read_to_string(warp.join("reserved.txt")),
+    ) else {
+        return Ok(false);
+    };
+    if !warp.join("wgcf-account.toml").is_file() {
+        return Ok(false);
+    }
+    let field = |name: &str| -> Option<String> {
+        conf.lines()
+            .filter_map(|line| line.split_once('='))
+            .find(|(key, _)| key.trim() == name)
+            .map(|(_, value)| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    };
+    let (Some(private), Some(public), Some(addresses)) =
+        (field("PrivateKey"), field("PublicKey"), field("Address"))
+    else {
+        return Ok(false);
+    };
+    let pick = |v6: bool| {
+        addresses
+            .split(',')
+            .map(|a| a.trim().split('/').next().unwrap_or("").to_owned())
+            .find(|a| a.contains(':') == v6 && !a.is_empty())
+    };
+    let (Some(ipv4), Some(ipv6)) = (pick(false), pick(true)) else {
+        return Ok(false);
+    };
+    let reserved = reserved.trim();
+    let bytes: Vec<u8> = serde_json::from_str(reserved).unwrap_or_default();
+    if bytes.len() != 3 {
+        return Ok(false);
+    }
+    let yaml = [
+        "# Сгенерировано WarpUnblock из data/warp/wgcf-profile.conf, пересоздаётся при каждом запуске."
+            .to_owned(),
+        "proxies:".into(),
+        "  - name: WARP-WG".into(),
+        "    type: wireguard".into(),
+        format!("    server: {}", profile.endpoint),
+        format!("    port: {}", profile.port),
+        format!("    ip: {ipv4}"),
+        format!("    ipv6: {ipv6}"),
+        format!("    private-key: {private}"),
+        format!("    public-key: {public}"),
+        "    mtu: 1280".into(),
+        "    udp: true".into(),
+        "    amnezia-wg-option:".into(),
+        format!("      jc: {}", profile.jc),
+        format!("      jmin: {}", profile.jmin),
+        format!("      jmax: {}", profile.jmax),
+        format!("    reserved: [{}, {}, {}]", bytes[0], bytes[1], bytes[2]),
+        String::new(),
+    ]
+    .join("
+");
+    fs::create_dir_all(root.join("data/mihomo"))?;
+    fs::write(root.join("data/mihomo/warp.yaml"), yaml)?;
+    Ok(true)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -416,7 +531,7 @@ impl Engine {
         if !platform::is_admin() {
             bail!("Подключение требует прав администратора");
         }
-        let result = self.start_inner(&settings, test);
+        let result = self.start_inner(&settings, test, CONNECT_BUDGET, true);
         if result.is_err() || test {
             self.stop();
         }
@@ -432,7 +547,15 @@ impl Engine {
         }
         result.map(|_| ())
     }
-    fn start_inner(&mut self, settings: &Settings, test: bool) -> Result<u64> {
+    /// `budget` — сколько ждать ответа WARP; `validate` — прогнать `mihomo -t` (при подборе
+    /// конфиг не меняется между профилями, достаточно проверить его один раз).
+    fn start_inner(
+        &mut self,
+        settings: &Settings,
+        test: bool,
+        budget: Duration,
+        validate: bool,
+    ) -> Result<u64> {
         let port = if test { 9091 } else { 9090 };
         let ports = if test {
             vec![port, 7891]
@@ -495,6 +618,17 @@ impl Engine {
             None
         };
         self.stage(2, "Настройка профиля WARP");
+        if bootstrap.is_none() && write_profile(&self.root, profile)? {
+            self.item(1, "Профиль WARP готов", true);
+        } else {
+            self.profile_script(profile)?;
+            self.item(1, "Профиль WARP готов", true);
+        }
+        drop(bootstrap);
+        self.finish_start(test, port, budget, validate, settings)
+    }
+
+    fn profile_script(&mut self, profile: &strategies::Strategy) -> Result<()> {
         let parameters = [
             "-Action".to_string(),
             "register".into(),
@@ -513,9 +647,17 @@ impl Engine {
             "warp.ps1",
             &parameters.iter().map(String::as_str).collect::<Vec<_>>(),
             "profile.log",
-        )?;
-        drop(bootstrap);
-        self.item(1, "Профиль WARP готов", true);
+        )
+    }
+
+    fn finish_start(
+        &mut self,
+        test: bool,
+        port: u16,
+        budget: Duration,
+        validate: bool,
+        settings: &Settings,
+    ) -> Result<u64> {
         let config = if test {
             "app/config/warp-test.yaml"
         } else {
@@ -528,11 +670,14 @@ impl Engine {
             self.root.join(config).display().to_string(),
         ];
         self.stage(3, "Проверка конфигурации");
-        let mut validation = vec!["-t".to_string()];
-        validation.extend(args.clone());
-        self.log("Проверяю конфигурацию mihomo…");
-        let process = self.launch("app/bin/mihomo/mihomo.exe", &validation, "validation.log")?;
-        self.wait(process, Duration::from_secs(5))?;
+        if validate {
+            let mut validation = vec!["-t".to_string()];
+            validation.extend(args.clone());
+            self.log("Проверяю конфигурацию mihomo…");
+            let process =
+                self.launch("app/bin/mihomo/mihomo.exe", &validation, "validation.log")?;
+            self.wait(process, Duration::from_secs(5))?;
+        }
         self.log(if test {
             "Проверяю стратегию без TUN…"
         } else {
@@ -544,7 +689,7 @@ impl Engine {
         self.running = !test;
         self.state(true, "Проверяю тоннель WARP…");
         self.stage(4, "Проверка тоннеля WARP");
-        let delay = self.delay(port, Duration::from_secs(5))?;
+        let delay = self.delay(port, budget)?;
         self.stage(STAGES, "Готово");
         self.item(2, &format!("WARP отвечает · {delay} мс"), true);
         self.log(&format!("WARP доступен, задержка {delay} мс."));
@@ -572,6 +717,11 @@ impl Engine {
         let mut failed = 0usize;
         let mut candidates = Vec::new();
         settings.custom = false;
+        let budget = pick_budget(&self.root);
+        self.log(&format!(
+            "Подбор: на ответ WARP {:.1} с на профиль.",
+            budget.as_secs_f32()
+        ));
         for (attempt, index) in order.enumerate() {
             self.cancelled()?;
             settings.strategy = index;
@@ -587,7 +737,7 @@ impl Engine {
                     catalog[index].name
                 ),
             );
-            let result = self.start_inner(&settings, true);
+            let result = self.start_inner(&settings, true, budget, attempt == 0);
             // A fresh WireGuard instance for each trial avoids testing an old handshake.
             self.stop();
             let (delay, error) = match &result {
@@ -644,7 +794,7 @@ impl Engine {
         bail!("Ни один профиль не прошёл проверку. См. data/strategy-results.json")
     }
     fn delay(&self, port: u16, timeout: Duration) -> Result<u64> {
-        let result = probe_delay(port, timeout, || {
+        let result = probe_delay(port, READY_TIMEOUT, timeout, || {
             self.cancelled()?;
             if self
                 .children
@@ -682,7 +832,7 @@ impl Engine {
             self.state(false, "Отключено");
             return Ok(());
         }
-        let delay = self.delay(9090, Duration::from_secs(5))?;
+        let delay = self.delay(9090, CONNECT_BUDGET)?;
         self.item(2, &format!("WARP отвечает · {delay} мс"), true);
         self.log(&format!("Проверка WARP: {delay} мс."));
         let client = reqwest::blocking::Client::builder()
@@ -714,7 +864,7 @@ impl Engine {
     }
 
     fn refresh_health(&mut self) {
-        match self.delay(9090, Duration::from_secs(5)) {
+        match self.delay(9090, CONNECT_BUDGET) {
             Ok(delay) => {
                 self.item(2, &format!("WARP отвечает · {delay} мс"), true);
                 let result = if self
@@ -962,7 +1112,8 @@ mod tests {
             thread::sleep(Duration::from_secs(1));
         });
         let started = Instant::now();
-        assert!(probe_delay(port, Duration::from_millis(250), || Ok(())).is_err());
+        let budget = Duration::from_millis(250);
+        assert!(probe_delay(port, budget, budget, || Ok(())).is_err());
         assert!(started.elapsed() < Duration::from_millis(750));
         worker.join().unwrap();
     }
@@ -971,16 +1122,139 @@ mod tests {
         use std::io::Read;
         let server = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = server.local_addr().unwrap().port();
+        // Два запроса: /version (готовность) и delay-тест.
         let worker = thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut socket, _) = server.accept().unwrap();
+                let _ = socket.read(&mut [0; 2048]);
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"delay\":42}").unwrap();
+            }
+        });
+        let second = Duration::from_secs(1);
+        assert_eq!(probe_delay(port, second, second, || Ok(())).unwrap(), 42);
+        worker.join().unwrap();
+    }
+    #[test]
+    fn tunnel_budget_starts_after_core_is_ready() {
+        use std::io::Read;
+        let server = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = server.local_addr().unwrap().port();
+        let worker = thread::spawn(move || {
+            // /version отвечает сразу, delay-тест зависает — как WARP, который молчит.
             let (mut socket, _) = server.accept().unwrap();
             let _ = socket.read(&mut [0; 2048]);
-            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"delay\":42}").unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .unwrap();
+            let (mut socket, _) = server.accept().unwrap();
+            let _ = socket.read(&mut [0; 2048]);
+            thread::sleep(Duration::from_secs(1));
         });
-        assert_eq!(
-            probe_delay(port, Duration::from_secs(1), || Ok(())).unwrap(),
-            42
-        );
+        let started = Instant::now();
+        let error = probe_delay(
+            port,
+            Duration::from_secs(1),
+            Duration::from_millis(300),
+            || Ok(()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("WARP не ответил"), "{error}");
+        assert!(started.elapsed() < Duration::from_millis(900));
         worker.join().unwrap();
+    }
+    #[test]
+    fn pick_budget_follows_history() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-pick-budget");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        assert_eq!(pick_budget(&root), PICK_BUDGET_MIN);
+        crate::features::record(&root, 0, Some(300)).unwrap();
+        assert_eq!(pick_budget(&root), PICK_BUDGET_MIN);
+        crate::features::record(&root, 1, Some(1200)).unwrap();
+        assert_eq!(
+            pick_budget(&root),
+            PICK_BUDGET_MIN,
+            "берётся лучший профиль"
+        );
+        let slow = root.join("slow");
+        fs::create_dir_all(&slow).unwrap();
+        crate::features::record(&slow, 0, Some(1000)).unwrap();
+        assert_eq!(pick_budget(&slow), Duration::from_millis(2500));
+        crate::features::record(&slow, 1, Some(9000)).unwrap();
+        assert_eq!(pick_budget(&slow), Duration::from_millis(2500));
+        let very = root.join("very");
+        fs::create_dir_all(&very).unwrap();
+        crate::features::record(&very, 0, Some(4000)).unwrap();
+        assert_eq!(pick_budget(&very), CONNECT_BUDGET);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn profile_without_powershell() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-write-profile");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data/warp")).unwrap();
+        let profile = strategies::Strategy {
+            name: "t".into(),
+            endpoint: "162.159.192.1".into(),
+            port: 2408,
+            jc: 4,
+            jmin: 40,
+            jmax: 70,
+            winws: false,
+            repeats: 0,
+            ttl: 0,
+            cutoff: 0,
+        };
+        assert!(
+            !write_profile(&root, &profile).unwrap(),
+            "без аккаунта нужен warp.ps1"
+        );
+        let key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        fs::write(root.join("data/warp/wgcf-account.toml"), "device_id = 'x'").unwrap();
+        fs::write(
+            root.join("data/warp/wgcf-profile.conf"),
+            format!("[Interface]\nPrivateKey = {key}\nAddress = 172.16.0.2/32, 2606:4700:110::1/128\n[Peer]\nPublicKey = {key}\n"),
+        )
+        .unwrap();
+        assert!(
+            !write_profile(&root, &profile).unwrap(),
+            "без reserved нужен warp.ps1"
+        );
+        fs::write(root.join("data/warp/reserved.txt"), "[1, 2, 3]\n").unwrap();
+        assert!(write_profile(&root, &profile).unwrap());
+        let yaml = fs::read_to_string(root.join("data/mihomo/warp.yaml")).unwrap();
+        for part in [
+            "
+  - name: WARP-WG
+",
+            "
+    server: 162.159.192.1
+",
+            "
+    port: 2408
+",
+            "
+    ip: 172.16.0.2
+",
+            "
+    ipv6: 2606:4700:110::1
+",
+            "
+    private-key: AAAA",
+            "
+    amnezia-wg-option:
+      jc: 4
+      jmin: 40
+      jmax: 70
+",
+            "
+    reserved: [1, 2, 3]
+",
+        ] {
+            assert!(yaml.contains(part), "{part}\n{yaml}");
+        }
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn custom_arguments_are_data_not_shell_commands() {

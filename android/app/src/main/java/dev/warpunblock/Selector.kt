@@ -40,6 +40,8 @@ object Selector {
             val preferred = AppState.strategyIndex.value.coerceIn(strategies.indices)
             val order = listOf(preferred) + strategies.indices.filter { it != preferred }
             val results = mutableMapOf<Int, Int>()
+            val budget = WarpProbe.pickBudget(ProfileStats.load(context).values)
+            AppState.log("Подбор: на ответ WARP %.1f с на профиль".format(budget / 1000.0))
             var failed = 0
             for ((attempt, index) in order.withIndex()) {
                 if (cancelled) break
@@ -54,7 +56,7 @@ object Selector {
                 core.writeProfile(strategy, account)
                 val test = core.start(true)
                 process = test
-                val delay = core.waitDelay(Core.TEST_API_PORT, 5) { test.runningCompat() && !cancelled }
+                val delay = core.waitDelay(Core.TEST_API_PORT, budget) { test.runningCompat() && !cancelled }
                 test.stopCompat()
                 val stopDeadline = System.nanoTime() + 250_000_000L
                 while (test.runningCompat() && System.nanoTime() < stopDeadline) Thread.sleep(10)
