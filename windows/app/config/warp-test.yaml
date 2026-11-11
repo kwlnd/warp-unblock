@@ -1,5 +1,5 @@
 # Проверка профиля WARP из приложения: без TUN и правил
-mixed-port: 7891
+mixed-port: 5631
 external-controller: 127.0.0.1:9091
 log-level: warning
 ipv6: true

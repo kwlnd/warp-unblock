@@ -3,7 +3,7 @@
 #  Zapret пробивает DPI до WARP, mihomo сам держит WireGuard-тоннель до WARP (TCP и UDP)
 # ============================================================================
 
-mixed-port: 7890
+mixed-port: 5630
 # Opera API and its upstream TLS are always carried inside WARP.
 listeners:
   - name: opera-underlay

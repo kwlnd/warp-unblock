@@ -68,6 +68,11 @@ class Core(private val context: Context) {
 
     fun start(test: Boolean): Process {
         check(binary.isFile) { "Нет ядра mihomo (${binary.name}) для этой архитектуры" }
+        // Если порт держит другое приложение (FlClash и т.п.), mihomo пишет ошибку и работает
+        // дальше: API отвечает, WARP проверяется, а трафик TUN уходит в чужой прокси.
+        for (port in if (test) listOf(TEST_PROXY_PORT, TEST_API_PORT) else listOf(PROXY_PORT, API_PORT)) {
+            check(portFree(port)) { "Порт $port занят другим приложением. Закройте другой VPN или прокси (например, FlClash) и подключитесь снова." }
+        }
         val log = File(home, if (test) "mihomo-test.log" else "mihomo.log")
         return ProcessBuilder(
             binary.absolutePath, "-d", home.absolutePath, "-f",
@@ -99,14 +104,18 @@ class Core(private val context: Context) {
         }
     }
 
+    private fun portFree(port: Int): Boolean = runCatching {
+        java.net.ServerSocket(port, 1, java.net.InetAddress.getByName("127.0.0.1")).close()
+    }.isSuccess
+
     private fun copyAsset(name: String, target: File) {
         context.assets.open(name).use { input -> target.outputStream().use { input.copyTo(it) } }
     }
 
     companion object {
-        const val PROXY_PORT = 7890
+        const val PROXY_PORT = 5630
         const val API_PORT = 9090
-        const val TEST_PROXY_PORT = 7891
+        const val TEST_PROXY_PORT = 5631
         const val TEST_API_PORT = 9091
     }
 }

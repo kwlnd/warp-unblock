@@ -558,9 +558,9 @@ impl Engine {
     ) -> Result<u64> {
         let port = if test { 9091 } else { 9090 };
         let ports = if test {
-            vec![port, 7891]
+            vec![port, 5631]
         } else {
-            vec![port, 7890, opera::PORT, opera::UNDERLAY_PORT]
+            vec![port, 5630, opera::PORT, opera::UNDERLAY_PORT]
         };
         for port in ports {
             let _probe = TcpListener::bind(("127.0.0.1", port)).with_context(|| {
@@ -852,7 +852,7 @@ impl Engine {
         self.log(&format!("Проверка WARP: {delay} мс."));
         let client = reqwest::blocking::Client::builder()
             .no_proxy()
-            .proxy(reqwest::Proxy::all("http://127.0.0.1:7890")?)
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:5630")?)
             .timeout(Duration::from_secs(12))
             .build()?;
         let response = client
