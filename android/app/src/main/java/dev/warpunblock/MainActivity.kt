@@ -139,6 +139,12 @@ class MainActivity : ComponentActivity() {
             this,
             Intent(this, WarpVpnService::class.java).setAction(WarpVpnService.ACTION_START),
         )
+        // Один раз при первом подключении: иначе MIUI и другие оболочки гасят VPN при блокировке.
+        val prefs = Preferences(this)
+        if (!prefs.askedBackground && !Background.unrestricted(this)) {
+            prefs.askedBackground = true
+            Background.requestUnrestricted(this)
+        }
     }
 
     private fun stopVpn() {

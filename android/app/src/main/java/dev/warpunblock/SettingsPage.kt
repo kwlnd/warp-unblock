@@ -105,6 +105,36 @@ internal fun SettingsPage(locked: Boolean) {
             Text("В настройках VPN выберите WARP Unblock → «Постоянная VPN» (Always-on). «Блокировать соединения без VPN» — системный kill switch. При раздельном туннелировании исключённые приложения могут потерять сеть.")
         }
     }
+    // Статус перечитывается при возврате из системных настроек.
+    var unrestricted by remember { mutableStateOf(Background.unrestricted(context)) }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) unrestricted = Background.unrestricted(context)
+        }
+        lifecycle.lifecycle.addObserver(observer)
+        onDispose { lifecycle.lifecycle.removeObserver(observer) }
+    }
+    WarpCard {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Работа в фоне", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(
+                if (unrestricted) "Экономия батареи VPN не ограничивает."
+                else "Экономия батареи может закрыть VPN, когда экран погаснет.",
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!unrestricted) {
+                    FilledTonalButton(onClick = { Background.requestUnrestricted(context) }) { Text("Снять ограничение") }
+                }
+                if (Background.xiaomi) {
+                    FilledTonalButton(onClick = { Background.openAutostart(context) }) { Text("Автозапуск") }
+                }
+            }
+            if (Background.xiaomi) {
+                Text("На Xiaomi включите автозапуск, а в настройках приложения → «Контроль активности» выберите «Нет ограничений». В недавних приложениях карточку можно закрепить замком.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
     WarpCard {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Приложения в VPN", fontSize = 16.sp, fontWeight = FontWeight.Bold)

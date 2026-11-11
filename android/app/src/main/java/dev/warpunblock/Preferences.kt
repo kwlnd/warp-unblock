@@ -22,6 +22,10 @@ class Preferences(context: Context) {
     var autoSwitch: Boolean
         get() = prefs.getBoolean("auto_switch", true)
         set(value) { prefs.edit().putBoolean("auto_switch", value).apply() }
+    /** Уже спрашивали исключение из экономии батареи — второй раз сами не предлагаем. */
+    var askedBackground: Boolean
+        get() = prefs.getBoolean("asked_background", false)
+        set(value) { prefs.edit().putBoolean("asked_background", value).apply() }
     var checkUpdates: Boolean
         get() = prefs.getBoolean("check_updates", true)
         set(value) { prefs.edit().putBoolean("check_updates", value).apply() }

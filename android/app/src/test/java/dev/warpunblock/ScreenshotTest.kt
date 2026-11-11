@@ -69,6 +69,12 @@ class ScreenshotTest {
     }
 
     @Test
+    fun settingsDark() {
+        AppState.set(UiState())
+        shot("settings-dark", night = true, tab = 3)
+    }
+
+    @Test
     fun listsLight() {
         AppState.set(UiState())
         shot("lists-light", night = false, tab = 2)
