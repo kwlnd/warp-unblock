@@ -199,6 +199,9 @@ pub struct Settings {
     /// WARP перестал отвечать — подобрать другой профиль и переподключиться самому.
     #[serde(default = "yes")]
     pub auto_switch: bool,
+    /// Рабочий адрес WARP из пула каталога («ip:порт»), найденный подбором.
+    #[serde(default)]
+    pub endpoint: String,
 }
 fn system_theme() -> String {
     "system".into()
@@ -219,6 +222,7 @@ impl Default for Settings {
             skip_version: String::new(),
             theme: system_theme(),
             auto_switch: true,
+            endpoint: String::new(),
         }
     }
 }
@@ -256,7 +260,8 @@ pub enum Event {
         status: String,
     },
     Check(usize, String, bool),
-    Selected(usize),
+    /// Подбор выбрал профиль и адрес из пула.
+    Selected(usize, String),
     /// Этап одной проверки/подключения: (сделано, всего, название).
     Stage(usize, usize, String),
     /// Автоподбор: (пройдено, всего, не прошло). None — подбор не идёт.
@@ -594,9 +599,13 @@ impl Engine {
         self.stage(0, "Подготовка компонентов");
         self.prepare()?;
         let catalog = strategies::load(&self.root)?;
-        let profile = catalog
-            .get(settings.strategy)
-            .context("Неизвестный профиль WARP")?;
+        if settings.strategy >= catalog.len() {
+            bail!("Неизвестный профиль WARP");
+        }
+        let profile = &catalog.resolve(
+            settings.strategy,
+            catalog.endpoint_index(&settings.endpoint),
+        );
         self.log(&format!(
             "Профиль: {} · {}:{}",
             profile.name, profile.endpoint, profile.port
@@ -742,6 +751,9 @@ impl Engine {
         Ok(delay)
     }
 
+    /// Подбор: пары «профиль × адрес» в порядке [`strategies::search_order`] — сначала все адреса
+    /// текущего профиля, потом остальные профили. `best` — у каждого профиля найти первый рабочий
+    /// адрес и выбрать лучший по истории; иначе остановиться на первой рабочей паре.
     fn auto_select(&mut self, mut settings: Settings, best: bool) -> Result<()> {
         if !platform::is_admin() {
             bail!("Подбор требует прав администратора");
@@ -749,32 +761,39 @@ impl Engine {
         self.prepare()?;
         let catalog = strategies::load(&self.root)?;
         let original = settings.clone();
-        let preferred = settings.strategy.min(catalog.len() - 1);
-        let order =
-            std::iter::once(preferred).chain((0..catalog.len()).filter(|i| *i != preferred));
+        let order = strategies::search_order(
+            &catalog,
+            settings.strategy,
+            catalog.endpoint_index(&settings.endpoint),
+        );
+        let total = order.len();
         let mut results = Vec::new();
         let mut failed = 0usize;
         let mut candidates = Vec::new();
+        let mut found = std::collections::BTreeMap::new();
         settings.custom = false;
         let budget = pick_budget(&self.root);
         self.log(&format!(
-            "Подбор: на ответ WARP {:.1} с на профиль.",
+            "Подбор: {} профилей × {} адресов, на ответ WARP {:.1} с.",
+            catalog.len(),
+            catalog.endpoints.len(),
             budget.as_secs_f32()
         ));
-        for (attempt, index) in order.enumerate() {
+        for (attempt, (index, endpoint)) in order.into_iter().enumerate() {
             self.cancelled()?;
+            // В режиме «лучший» у профиля достаточно одного рабочего адреса.
+            if best && found.contains_key(&index) {
+                continue;
+            }
             settings.strategy = index;
+            settings.endpoint = catalog.endpoints[endpoint].clone();
             let _ = self
                 .events
-                .send(Event::Batch(Some((attempt, catalog.len(), failed))));
+                .send(Event::Batch(Some((attempt, total, failed))));
+            let name = format!("{} · {}", catalog.profiles[index].name, settings.endpoint);
             self.state(
                 true,
-                &format!(
-                    "Подбор WARP · {}/{} · {}",
-                    attempt + 1,
-                    catalog.len(),
-                    catalog[index].name
-                ),
+                &format!("Подбор WARP · {}/{} · {name}", attempt + 1, total),
             );
             let result = self.start_inner(&settings, true, budget, attempt == 0);
             // A fresh WireGuard instance for each trial avoids testing an old handshake.
@@ -787,8 +806,9 @@ impl Engine {
             crate::features::record(&self.root, index, delay)?;
             if let Some(ms) = delay {
                 candidates.push((index, ms));
+                found.insert(index, settings.endpoint.clone());
             }
-            results.push(serde_json::json!({"name": catalog[index].name, "index": index, "delay_ms": delay, "error": error}));
+            results.push(serde_json::json!({"name": catalog.profiles[index].name, "index": index, "endpoint": settings.endpoint, "delay_ms": delay, "error": error}));
             fs::write(
                 self.root.join("data/strategy-results.json"),
                 serde_json::to_vec_pretty(&results)?,
@@ -798,33 +818,34 @@ impl Engine {
             }
             let _ = self
                 .events
-                .send(Event::Batch(Some((attempt + 1, catalog.len(), failed))));
+                .send(Event::Batch(Some((attempt + 1, total, failed))));
             if result.is_ok() && !best {
                 settings.save(&self.root)?;
-                let _ = self.events.send(Event::Selected(index));
-                self.log(&format!(
-                    "Рабочий профиль сохранён: {}. Нажмите «Подключить».",
-                    catalog[index].name
-                ));
+                let _ = self
+                    .events
+                    .send(Event::Selected(index, settings.endpoint.clone()));
+                self.log(&format!("Рабочая пара сохранена: {name}."));
                 self.state(false, "Профиль WARP подобран");
                 return Ok(());
             }
             self.log(&format!(
-                "{}: {}",
+                "{}: {name}",
                 if result.is_ok() {
                     "Прошёл"
                 } else {
                     "Не прошёл"
-                },
-                catalog[index].name
+                }
             ));
             self.cancelled()?;
         }
         if best {
             if let Some(index) = crate::features::best(&self.root, &candidates) {
                 settings.strategy = index;
+                settings.endpoint = found[&index].clone();
                 settings.save(&self.root)?;
-                let _ = self.events.send(Event::Selected(index));
+                let _ = self
+                    .events
+                    .send(Event::Selected(index, settings.endpoint.clone()));
                 self.state(false, "Лучший профиль сохранён");
                 return Ok(());
             }
@@ -902,24 +923,26 @@ impl Engine {
         self.item(3, "Opera EU выключена", false);
     }
 
-    /// WARP перестал отвечать на текущем профиле: подбор начиная со следующего (сломанный —
-    /// последним) и подключение с найденным. Провайдер обычно режет конкретный адрес или
-    /// приём маскировки, а соседний профиль продолжает работать.
+    /// WARP перестал отвечать: подбор с того же профиля на следующем адресе пула (сломанный адрес —
+    /// последним), затем другие профили, и подключение с найденной парой. Провайдер обычно режет
+    /// конкретный адрес, а маскировка продолжает работать на соседнем.
     fn switch_profile(&mut self, mut settings: Settings) -> Result<()> {
         let catalog = strategies::load(&self.root)?;
-        let broken = settings.strategy.min(catalog.len() - 1);
+        let broken = catalog.endpoint_index(&settings.endpoint);
         self.log(&format!(
-            "WARP не отвечает на профиле «{}». Ищу другой рабочий профиль…",
-            catalog[broken].name
+            "WARP не отвечает: {} · {}. Ищу другой адрес…",
+            catalog.profiles[settings.strategy.min(catalog.len() - 1)].name,
+            catalog.endpoints[broken]
         ));
-        self.state(true, "WARP пропал · ищу другой профиль…");
+        self.state(true, "WARP пропал · ищу другой адрес…");
         self.stop();
-        settings.strategy = (broken + 1) % catalog.len();
+        settings.endpoint = catalog.endpoints[(broken + 1) % catalog.endpoints.len()].clone();
         self.auto_select(settings, false)?;
         let settings = Settings::load(&self.root);
         self.log(&format!(
-            "Переключаюсь на профиль «{}».",
-            catalog[settings.strategy.min(catalog.len() - 1)].name
+            "Переключаюсь: {} · {}.",
+            catalog.profiles[settings.strategy.min(catalog.len() - 1)].name,
+            settings.endpoint
         ));
         self.start(settings, false)
     }
@@ -1035,10 +1058,14 @@ fn strategy_args(settings: &Settings, root: &Path) -> Result<Vec<String>> {
         return parse_args(&settings.custom_args);
     }
     let catalog = strategies::load(root)?;
-    let profile = catalog
-        .get(settings.strategy)
-        .context("Неизвестный профиль WARP")?;
-    Ok(strategies::args(profile, root))
+    if settings.strategy >= catalog.len() {
+        bail!("Неизвестный профиль WARP");
+    }
+    let profile = catalog.resolve(
+        settings.strategy,
+        catalog.endpoint_index(&settings.endpoint),
+    );
+    Ok(strategies::args(&profile, root))
 }
 // Only split arguments; never execute a shell or interpolate custom input.
 fn parse_args(input: &str) -> Result<Vec<String>> {
@@ -1082,9 +1109,11 @@ pub fn self_test(root: &Path) -> Result<()> {
         }
         let job = Job::new()?;
         // Профили WARP и способы регистрации: winws должен принять каждый набор аргументов.
-        let profiles = strategies::load(root)?
-            .into_iter()
-            .map(|p| (p.name.clone(), strategies::args(&p, root)));
+        let catalog = strategies::load(root)?;
+        let profiles = (0..catalog.len()).map(|i| {
+            let p = catalog.resolve(i, 0);
+            (p.name.clone(), strategies::args(&p, root))
+        });
         let methods = crate::registration::load(root)?
             .into_iter()
             .filter_map(|m| {

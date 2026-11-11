@@ -53,42 +53,48 @@ object Selector {
                     AppState.log(it)
                 }
             }
-            val strategies = Strategies.load(context)
-            val preferred = AppState.strategyIndex.value.coerceIn(strategies.indices)
-            val order = listOf(preferred) + strategies.indices.filter { it != preferred }
+            val catalog = Strategies.load(context)
+            val order = catalog.searchOrder(AppState.strategyIndex.value, catalog.endpointIndex(AppState.endpoint.value))
             val results = mutableMapOf<Int, Int>()
+            // Режим «лучший»: у профиля достаточно одного рабочего адреса.
+            val found = mutableMapOf<Int, String>()
             val budget = WarpProbe.pickBudget(ProfileStats.load(context).values)
-            AppState.log("Подбор: на ответ WARP %.1f с на профиль".format(budget / 1000.0))
+            AppState.log("Подбор: ${catalog.size} профилей × ${catalog.endpoints.size} адресов, на ответ WARP %.1f с".format(budget / 1000.0))
             var failed = 0
-            for ((attempt, index) in order.withIndex()) {
+            for ((attempt, pair) in order.withIndex()) {
                 if (cancelled) break
-                val strategy = strategies[index]
+                val (index, endpoint) = pair
+                if (best && index in found) continue
+                val strategy = catalog.resolve(index, endpoint)
+                val address = catalog.endpoints[endpoint]
+                val name = "${strategy.name} · $address"
                 AppState.set(
                     UiState(
                         Phase.BUSY, "Подбор профиля",
-                        "${attempt + 1}/${strategies.size} · ${strategy.name}",
-                        Triple(attempt, strategies.size, failed), selecting = true,
+                        "${attempt + 1}/${order.size} · $name",
+                        Triple(attempt, order.size, failed), selecting = true,
                     ),
                 )
                 val delay = probe(core, strategy, account, budget) { !cancelled }
                 if (cancelled) break
                 ProfileStats.record(context, index, delay)
-                results[index] = delay ?: 0
-                if (delay == null) failed++
+                // У профиля может быть несколько попыток на разных адресах: важна удачная.
+                if (delay != null || index !in results) results[index] = delay ?: 0
+                if (delay == null) failed++ else found[index] = address
                 AppState.saveResults(AppState.results.value + results)
                 if (delay != null && !best) {
-                    AppState.selectStrategy(index)
-                    AppState.log("Рабочий профиль: ${strategy.name} ($delay мс)")
-                    AppState.set(UiState(Phase.IDLE, "Профиль WARP подобран", "${strategy.name} · $delay мс"))
+                    AppState.selectPair(index, address)
+                    AppState.log("Рабочая пара: $name ($delay мс)")
+                    AppState.set(UiState(Phase.IDLE, "Профиль WARP подобран", "$name · $delay мс"))
                     return
                 }
-                AppState.log("${if (delay != null) "Прошёл" else "Не прошёл"}: ${strategy.name}")
+                AppState.log("${if (delay != null) "Прошёл" else "Не прошёл"}: $name")
             }
             if (best && !cancelled) {
                 val index = ProfileStats.best(context, results.filterValues { it > 0 })
                 if (index != null) {
-                    AppState.selectStrategy(index)
-                    AppState.set(UiState(Phase.IDLE, "Лучший профиль сохранён", "${strategies[index].name} · ${results[index]} мс"))
+                    AppState.selectPair(index, found.getValue(index))
+                    AppState.set(UiState(Phase.IDLE, "Лучший профиль сохранён", "${catalog.profiles[index].name} · ${found[index]} · ${results[index]} мс"))
                     return
                 }
             }

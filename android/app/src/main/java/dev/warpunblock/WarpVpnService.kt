@@ -57,9 +57,9 @@ class WarpVpnService : VpnService() {
             }
             if (stopping) return
             this.account = account
-            val strategies = Strategies.load(this)
-            val strategy = strategies[AppState.strategyIndex.value.coerceIn(strategies.indices)]
-            AppState.log("Профиль: ${strategy.name}")
+            val catalog = Strategies.load(this)
+            val strategy = catalog.resolve(AppState.strategyIndex.value, catalog.endpointIndex(AppState.endpoint.value))
+            AppState.log("Профиль: ${strategy.name} · ${strategy.endpoint}:${strategy.port}")
             core.writeProfile(strategy, account)
             val process = core.start(false)
             mihomo = process
@@ -175,27 +175,30 @@ class WarpVpnService : VpnService() {
     }
 
     /**
-     * WARP перестал отвечать: проверяет профили, начиная со следующего (сломанный — последним),
-     * и перезапускает основное ядро на первом рабочем. Провайдер обычно режет конкретный адрес
-     * или приём маскировки, а соседний профиль продолжает работать. Возвращает новое ядро.
+     * WARP перестал отвечать: проверяет тот же профиль на следующих адресах пула (сломанный —
+     * последним), затем другие профили, и перезапускает основное ядро на первой рабочей паре.
+     * Провайдер обычно режет конкретный адрес, а маскировка работает на соседнем. Возвращает ядро.
      */
     private fun switchProfile(core: Core): Process? {
         val account = this.account ?: return null
-        val strategies = Strategies.load(this)
-        val broken = AppState.strategyIndex.value.coerceIn(strategies.indices)
-        AppState.log("WARP не отвечает на профиле «${strategies[broken].name}». Ищу другой рабочий профиль")
-        updateNotification("Ищу другой профиль…")
+        val catalog = Strategies.load(this)
+        val profile = AppState.strategyIndex.value.coerceIn(catalog.profiles.indices)
+        val broken = catalog.endpointIndex(AppState.endpoint.value)
+        AppState.log("WARP не отвечает: ${catalog.profiles[profile].name} · ${catalog.endpoints[broken]}. Ищу другой адрес")
+        updateNotification("Ищу другой адрес…")
         val budget = WarpProbe.pickBudget(ProfileStats.load(this).values)
-        val order = (1..strategies.size).map { (broken + it) % strategies.size }
-        for ((attempt, index) in order.withIndex()) {
+        val order = catalog.searchOrder(profile, broken + 1)
+        for ((attempt, pair) in order.withIndex()) {
             if (stopping) return null
-            val strategy = strategies[index]
-            AppState.set(UiState(Phase.BUSY, "WARP пропал · ищу профиль", "${attempt + 1}/${strategies.size} · ${strategy.name}"))
+            val (index, endpoint) = pair
+            val strategy = catalog.resolve(index, endpoint)
+            val address = catalog.endpoints[endpoint]
+            AppState.set(UiState(Phase.BUSY, "WARP пропал · ищу адрес", "${attempt + 1}/${order.size} · ${strategy.name} · $address"))
             val delay = runCatching { Selector.probe(core, strategy, account, budget) { !stopping } }.getOrNull()
             ProfileStats.record(this, index, delay)
             if (delay == null || stopping) continue
-            AppState.selectStrategy(index)
-            AppState.log("Переключаюсь на профиль «${strategy.name}» ($delay мс)")
+            AppState.selectPair(index, address)
+            AppState.log("Переключаюсь: ${strategy.name} · $address ($delay мс)")
             core.writeProfile(strategy, account)
             mihomo?.let { old ->
                 old.stopCompat()

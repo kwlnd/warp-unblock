@@ -1,278 +1,139 @@
-[
-  {
-    "name": "WARP · padding 4 · без zapret",
-    "endpoint": "162.159.192.1",
-    "port": 2408,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70
-  },
-  {
-    "name": "WARP · 188.114.97.1:4500 · padding 4",
-    "endpoint": "188.114.97.1",
-    "port": 4500,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70
-  },
-  {
-    "name": "WARP · 188.114.98.1:2408 · padding 4",
-    "endpoint": "188.114.98.1",
-    "port": 2408,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70
-  },
-  {
-    "name": "WARP · 188.114.99.1:500 · padding 4",
-    "endpoint": "188.114.99.1",
-    "port": 500,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70
-  },
-  {
-    "name": "WARP · 188.114.96.1:1701 · padding 4",
-    "endpoint": "188.114.96.1",
-    "port": 1701,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70
-  },
-  {
-    "name": "WARP · 188.114.99.1:2408 · UDP fake ×6",
-    "endpoint": "188.114.99.1",
-    "port": 2408,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70,
-    "zapret": [
-      "--dpi-desync=fake",
-      "--dpi-desync-repeats=6",
-      "--dpi-desync-cutoff=n8"
-    ]
-  },
-  {
-    "name": "WARP · UDP fake ×6",
-    "endpoint": "162.159.192.1",
-    "port": 2408,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70,
-    "zapret": [
-      "--dpi-desync=fake",
-      "--dpi-desync-repeats=6",
-      "--dpi-desync-cutoff=n8"
-    ]
-  },
-  {
-    "name": "WARP · фейк QUIC vk.com",
-    "endpoint": "162.159.192.1",
-    "port": 2408,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70,
-    "zapret": [
-      "--dpi-desync=fake",
-      "--dpi-desync-repeats=6",
-      "--dpi-desync-cutoff=n2",
-      "--dpi-desync-fake-unknown-udp={zapret}/quic_initial_vk_com.bin"
-    ]
-  },
-  {
-    "name": "WARP · фейк рукопожатие WireGuard",
-    "endpoint": "162.159.192.1",
-    "port": 2408,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70,
-    "zapret": [
-      "--dpi-desync=fake",
-      "--dpi-desync-repeats=6",
-      "--dpi-desync-cutoff=n4",
-      "--dpi-desync-fake-wireguard={zapret}/wireguard_initiation.bin"
-    ]
-  },
-  {
-    "name": "WARP · padding 8 · 64–128 байт",
-    "endpoint": "162.159.192.1",
-    "port": 2408,
-    "jc": 8,
-    "jmin": 64,
-    "jmax": 128
-  },
-  {
-    "name": "WARP · порт 500 · padding 4",
-    "endpoint": "162.159.192.1",
-    "port": 500,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70
-  },
-  {
-    "name": "WARP · порт 1701 · padding 4",
-    "endpoint": "162.159.192.1",
-    "port": 1701,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70
-  },
-  {
-    "name": "WARP · порт 4500 · padding 4",
-    "endpoint": "162.159.192.1",
-    "port": 4500,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70
-  },
-  {
-    "name": "WARP · фейк QUIC google.com",
-    "endpoint": "162.159.192.1",
-    "port": 2408,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70,
-    "zapret": [
-      "--dpi-desync=fake",
-      "--dpi-desync-repeats=6",
-      "--dpi-desync-cutoff=n2",
-      "--dpi-desync-fake-unknown-udp={zapret}/quic_initial_www_google_com.bin"
-    ]
-  },
-  {
-    "name": "WARP · UDP fake · TTL 6",
-    "endpoint": "162.159.192.1",
-    "port": 2408,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70,
-    "zapret": [
-      "--dpi-desync=fake",
-      "--dpi-desync-repeats=6",
-      "--dpi-desync-cutoff=n8",
-      "--dpi-desync-ttl=6"
-    ]
-  },
-  {
-    "name": "WARP · UDP fake · автоподбор TTL",
-    "endpoint": "162.159.192.1",
-    "port": 2408,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70,
-    "zapret": [
-      "--dpi-desync=fake",
-      "--dpi-desync-repeats=6",
-      "--dpi-desync-cutoff=n8",
-      "--dpi-desync-autottl=2"
-    ]
-  },
-  {
-    "name": "WARP · UDP fake ×12",
-    "endpoint": "162.159.192.1",
-    "port": 2408,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70,
-    "zapret": [
-      "--dpi-desync=fake",
-      "--dpi-desync-repeats=12",
-      "--dpi-desync-cutoff=n4"
-    ]
-  },
-  {
-    "name": "WARP · фейк рукопожатие WireGuard · TTL 6",
-    "endpoint": "162.159.192.1",
-    "port": 2408,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70,
-    "zapret": [
-      "--dpi-desync=fake",
-      "--dpi-desync-repeats=6",
-      "--dpi-desync-cutoff=n4",
-      "--dpi-desync-ttl=6",
-      "--dpi-desync-fake-wireguard={zapret}/wireguard_initiation.bin"
-    ]
-  },
-  {
-    "name": "WARP · порт 500 · фейк QUIC vk.com",
-    "endpoint": "162.159.192.1",
-    "port": 500,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70,
-    "zapret": [
-      "--dpi-desync=fake",
-      "--dpi-desync-repeats=6",
-      "--dpi-desync-cutoff=n2",
-      "--dpi-desync-fake-unknown-udp={zapret}/quic_initial_vk_com.bin"
-    ]
-  },
-  {
-    "name": "WARP · порт 1701 · UDP fake ×6",
-    "endpoint": "162.159.192.1",
-    "port": 1701,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70,
-    "zapret": [
-      "--dpi-desync=fake",
-      "--dpi-desync-repeats=6",
-      "--dpi-desync-cutoff=n8"
-    ]
-  },
-  {
-    "name": "WARP · порт 4500 · UDP fake ×6",
-    "endpoint": "162.159.192.1",
-    "port": 4500,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70,
-    "zapret": [
-      "--dpi-desync=fake",
-      "--dpi-desync-repeats=6",
-      "--dpi-desync-cutoff=n8"
-    ]
-  },
-  {
-    "name": "WARP · 193.10:854 · padding 4",
-    "endpoint": "162.159.193.10",
-    "port": 854,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70
-  },
-  {
-    "name": "WARP · 195.1:2408 · padding 4 · запасной эндпоинт",
-    "endpoint": "162.159.195.1",
-    "port": 2408,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70
-  },
-  {
-    "name": "WARP · padding 16 · без zapret",
-    "endpoint": "162.159.192.1",
-    "port": 2408,
-    "jc": 16,
-    "jmin": 40,
-    "jmax": 70
-  },
-  {
-    "name": "WARP · обычный WireGuard · без маскировки",
-    "endpoint": "162.159.192.1",
-    "port": 2408,
-    "jc": 0,
-    "jmin": 40,
-    "jmax": 70
-  },
-  {
-    "name": "WARP · 195.10:4500 · padding 4",
-    "endpoint": "162.159.195.10",
-    "port": 4500,
-    "jc": 4,
-    "jmin": 40,
-    "jmax": 70
-  }
-]
+{
+  "endpoints": [
+    "188.114.97.1:4500",
+    "188.114.98.1:2408",
+    "188.114.99.1:500",
+    "188.114.96.1:1701",
+    "162.159.195.1:2408",
+    "162.159.195.10:4500",
+    "188.114.97.1:2408",
+    "188.114.99.1:8854",
+    "162.159.195.1:500",
+    "162.159.192.1:2408",
+    "162.159.192.1:500",
+    "162.159.192.1:1701",
+    "162.159.192.10:4500",
+    "162.159.193.10:854"
+  ],
+  "profiles": [
+    {
+      "name": "padding 4 · без zapret",
+      "jc": 4,
+      "jmin": 40,
+      "jmax": 70
+    },
+    {
+      "name": "UDP fake ×6",
+      "jc": 4,
+      "jmin": 40,
+      "jmax": 70,
+      "zapret": [
+        "--dpi-desync=fake",
+        "--dpi-desync-repeats=6",
+        "--dpi-desync-cutoff=n8"
+      ]
+    },
+    {
+      "name": "фейк QUIC vk.com",
+      "jc": 4,
+      "jmin": 40,
+      "jmax": 70,
+      "zapret": [
+        "--dpi-desync=fake",
+        "--dpi-desync-repeats=6",
+        "--dpi-desync-cutoff=n2",
+        "--dpi-desync-fake-unknown-udp={zapret}/quic_initial_vk_com.bin"
+      ]
+    },
+    {
+      "name": "фейк рукопожатие WireGuard",
+      "jc": 4,
+      "jmin": 40,
+      "jmax": 70,
+      "zapret": [
+        "--dpi-desync=fake",
+        "--dpi-desync-repeats=6",
+        "--dpi-desync-cutoff=n4",
+        "--dpi-desync-fake-wireguard={zapret}/wireguard_initiation.bin"
+      ]
+    },
+    {
+      "name": "padding 8 · 64–128 байт",
+      "jc": 8,
+      "jmin": 64,
+      "jmax": 128
+    },
+    {
+      "name": "фейк QUIC google.com",
+      "jc": 4,
+      "jmin": 40,
+      "jmax": 70,
+      "zapret": [
+        "--dpi-desync=fake",
+        "--dpi-desync-repeats=6",
+        "--dpi-desync-cutoff=n2",
+        "--dpi-desync-fake-unknown-udp={zapret}/quic_initial_www_google_com.bin"
+      ]
+    },
+    {
+      "name": "UDP fake · TTL 6",
+      "jc": 4,
+      "jmin": 40,
+      "jmax": 70,
+      "zapret": [
+        "--dpi-desync=fake",
+        "--dpi-desync-repeats=6",
+        "--dpi-desync-cutoff=n8",
+        "--dpi-desync-ttl=6"
+      ]
+    },
+    {
+      "name": "UDP fake · автоподбор TTL",
+      "jc": 4,
+      "jmin": 40,
+      "jmax": 70,
+      "zapret": [
+        "--dpi-desync=fake",
+        "--dpi-desync-repeats=6",
+        "--dpi-desync-cutoff=n8",
+        "--dpi-desync-autottl=2"
+      ]
+    },
+    {
+      "name": "UDP fake ×12",
+      "jc": 4,
+      "jmin": 40,
+      "jmax": 70,
+      "zapret": [
+        "--dpi-desync=fake",
+        "--dpi-desync-repeats=12",
+        "--dpi-desync-cutoff=n4"
+      ]
+    },
+    {
+      "name": "фейк рукопожатие WireGuard · TTL 6",
+      "jc": 4,
+      "jmin": 40,
+      "jmax": 70,
+      "zapret": [
+        "--dpi-desync=fake",
+        "--dpi-desync-repeats=6",
+        "--dpi-desync-cutoff=n4",
+        "--dpi-desync-ttl=6",
+        "--dpi-desync-fake-wireguard={zapret}/wireguard_initiation.bin"
+      ]
+    },
+    {
+      "name": "padding 16 · без zapret",
+      "jc": 16,
+      "jmin": 40,
+      "jmax": 70
+    },
+    {
+      "name": "обычный WireGuard · без маскировки",
+      "jc": 0,
+      "jmin": 40,
+      "jmax": 70
+    }
+  ]
+}

@@ -317,8 +317,9 @@ private fun Home(ui: UiState, onToggle: () -> Unit) {
         }
     }
     val context = LocalContext.current
-    val strategies = remember { Strategies.load(context) }
+    val catalog = remember { Strategies.load(context) }
     val index by AppState.strategyIndex.collectAsState()
+    val endpoint by AppState.endpoint.collectAsState()
     val hint = when {
         ui.detail.isNotEmpty() -> ui.detail
         ui.phase == Phase.BUSY -> "Нажмите, чтобы отменить"
@@ -357,7 +358,8 @@ private fun Home(ui: UiState, onToggle: () -> Unit) {
             Metric("Время работы", since?.let { uptime(now - it) } ?: "—", R.drawable.ic_lucide_clock, Modifier.weight(1f))
             Metric("Пинг WARP", latency?.let { "$it мс" } ?: "—", R.drawable.ic_lucide_activity, Modifier.weight(1f))
         }
-        Metric("Профиль", strategies[index.coerceIn(strategies.indices)].name.replace("WARP · ", ""), R.drawable.ic_lucide_route, Modifier.fillMaxWidth())
+        val current = catalog.resolve(index, catalog.endpointIndex(endpoint))
+        Metric("Профиль", "${current.name} · ${current.endpoint}:${current.port}", R.drawable.ic_lucide_route, Modifier.fillMaxWidth())
     }
     WarpCard {
         Text("Трафик через VPN", fontSize = 13.sp, color = p.muted)
@@ -420,8 +422,9 @@ private fun shift(color: Color, hue: Float = 0f, saturation: Float = 1f, lightne
 private fun Profiles(ui: UiState, onAuto: () -> Unit) {
     val p = LocalPalette.current
     val context = LocalContext.current
-    val strategies = remember { Strategies.load(context) }
+    val catalog = remember { Strategies.load(context) }
     val index by AppState.strategyIndex.collectAsState()
+    val endpoint by AppState.endpoint.collectAsState()
     val results by AppState.results.collectAsState()
     val locked = ui.phase == Phase.BUSY || ui.phase == Phase.CONNECTED
     var hasAccount by remember { mutableStateOf(WarpAccount.load(context.filesDir) != null) }
@@ -480,7 +483,8 @@ private fun Profiles(ui: UiState, onAuto: () -> Unit) {
     ProfileStats.load(context)[index]?.let { stats ->
         Text("Текущий: успешно ${stats.successes}/${stats.attempts} · средняя задержка ${stats.totalMs / stats.successes.coerceAtLeast(1)} мс", fontSize = 13.sp, color = p.muted)
     }
-    strategies.forEachIndexed { i, strategy ->
+    Text("Адрес WARP подбирается сам из ${catalog.endpoints.size} вариантов; сейчас ${catalog.endpoints[catalog.endpointIndex(endpoint)]}.", fontSize = 13.sp, color = p.muted)
+    catalog.profiles.forEachIndexed { i, strategy ->
         val delay = results[i]
         val (color, note) = when {
             delay == null -> p.border to ""
@@ -497,7 +501,7 @@ private fun Profiles(ui: UiState, onAuto: () -> Unit) {
                 Dot(color, 9.dp)
                 Column(Modifier.weight(1f)) {
                     Text(strategy.name, fontSize = 15.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, color = p.text)
-                    Text("${strategy.endpoint}:${strategy.port} · padding ${strategy.jc}", fontSize = 12.sp, color = p.muted)
+                    Text("${strategy.jc} пакетов по ${strategy.jmin}–${strategy.jmax} байт", fontSize = 12.sp, color = p.muted)
                 }
                 if (note.isNotEmpty()) Text(note, fontSize = 13.sp, color = color)
             }

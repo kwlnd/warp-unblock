@@ -50,7 +50,7 @@ pub fn domains(text: &str) -> Result<String> {
 /// и выбор профиля привязаны к номерам, поэтому они сбрасываются. true — сброс был.
 pub fn sync_catalog(
     root: &Path,
-    catalog: &[crate::strategies::Strategy],
+    catalog: &crate::strategies::Catalog,
     settings: &mut Settings,
 ) -> bool {
     let id = crate::strategies::fingerprint(catalog);
@@ -66,6 +66,7 @@ pub fn sync_catalog(
         let _ = fs::remove_file(stats);
         let _ = fs::remove_file(results);
         settings.strategy = 0;
+        settings.endpoint.clear();
         let _ = settings.save(root);
     }
     let _ = fs::create_dir_all(root.join("data"));

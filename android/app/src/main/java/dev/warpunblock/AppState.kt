@@ -21,6 +21,8 @@ object AppState {
     val ui = MutableStateFlow(UiState())
     val logs = MutableStateFlow<List<String>>(emptyList())
     val strategyIndex = MutableStateFlow(0)
+    /** Рабочий адрес WARP из пула («ip:порт»), найденный подбором; пусто — первый в пуле. */
+    val endpoint = MutableStateFlow("")
     /** Результаты подбора: индекс профиля -> задержка в мс (0 — не прошёл). */
     val results = MutableStateFlow<Map<Int, Int>>(emptyMap())
     /** Последняя задержка WARP в мс. */
@@ -39,12 +41,13 @@ object AppState {
         val catalog = Strategies.fingerprint(Strategies.load(context))
         if (prefs.getString("catalog", null) != catalog) {
             if (prefs.contains("strategy") || prefs.contains("results")) {
-                prefs.edit().remove("strategy").remove("results").apply()
+                prefs.edit().remove("strategy").remove("endpoint").remove("results").apply()
                 ProfileStats.clear(context)
             }
             prefs.edit().putString("catalog", catalog).apply()
         }
         strategyIndex.value = prefs.getInt("strategy", 0)
+        endpoint.value = prefs.getString("endpoint", "") ?: ""
         results.value = runCatching {
             val json = JSONObject(prefs.getString("results", "{}") ?: "{}")
             json.keys().asSequence().associate { it.toInt() to json.getInt(it) }
@@ -54,6 +57,13 @@ object AppState {
     fun selectStrategy(index: Int) {
         strategyIndex.value = index
         prefs.edit().putInt("strategy", index).apply()
+    }
+
+    /** Подбор нашёл рабочую пару «профиль + адрес». */
+    fun selectPair(index: Int, address: String) {
+        selectStrategy(index)
+        endpoint.value = address
+        prefs.edit().putString("endpoint", address).apply()
     }
 
     fun saveResults(map: Map<Int, Int>) {

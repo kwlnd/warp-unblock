@@ -33,7 +33,14 @@ def main():
     ap.add_argument("--out", default="results.jsonl")
     a = ap.parse_args()
     if a.mode == "catalog":
-        items = json.load(open(r"D:\Files\projects\warp-unblock\windows\app\config\strategies.json", encoding="utf-8"))
+        # Каталог: все пары «профиль × адрес из пула».
+        here = os.path.dirname(os.path.abspath(__file__))
+        cat = json.load(open(os.path.join(here, "../../windows/app/config/strategies.json"), encoding="utf-8"))
+        items = []
+        for prof in cat["profiles"]:
+            for address in cat["endpoints"]:
+                ip, port = address.split(":")
+                items.append({**prof, "name": f"{prof['name']} · {address}", "endpoint": ip, "port": int(port)})
     else:
         items = json.load(open(a.file, encoding="utf-8"))
     with open(a.out, "a", encoding="utf-8") as f:

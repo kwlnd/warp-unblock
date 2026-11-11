@@ -240,7 +240,7 @@ struct Main {
     preview: bool,
     worker: Worker,
     settings: Settings,
-    catalog: Vec<strategies::Strategy>,
+    catalog: strategies::Catalog,
     page: Page,
     busy: bool,
     stage: Option<(usize, usize, String)>,
@@ -301,7 +301,7 @@ impl Main {
     ) -> Self {
         let mut settings = Settings::load(&root);
         let catalog = strategies::load(&root).unwrap_or_else(|_| {
-            serde_json::from_str(include_str!("../../app/config/strategies.json"))
+            strategies::parse(include_str!("../../app/config/strategies.json"))
                 .expect("built-in catalog")
         });
         settings.strategy = settings.strategy.min(catalog.len() - 1);
@@ -574,8 +574,9 @@ impl Main {
                 }
                 Event::Stage(done, total, text) => self.stage = Some((done, total, text)),
                 Event::Batch(batch) => self.batch = batch,
-                Event::Selected(index) => {
+                Event::Selected(index, endpoint) => {
                     self.settings.strategy = index;
+                    self.settings.endpoint = endpoint;
                     self.settings.custom = false;
                 }
             }
@@ -1722,9 +1723,15 @@ impl Main {
         if self.settings.custom {
             "свои аргументы winws".into()
         } else {
-            self.catalog[self.settings.strategy]
-                .name
-                .replace("WARP · ", "")
+            let address = if self.settings.endpoint.is_empty() {
+                self.catalog.endpoints[0].as_str()
+            } else {
+                self.settings.endpoint.as_str()
+            };
+            format!(
+                "{} · {address}",
+                self.catalog.profiles[self.settings.strategy].name
+            )
         }
     }
 
@@ -1743,6 +1750,7 @@ impl Main {
         let mut list = div().flex().flex_col().gap_1();
         let rows = self
             .catalog
+            .profiles
             .iter()
             .map(|p| (p.name.clone(), false))
             .chain([("Свои аргументы winws".to_owned(), true)]);
@@ -1861,7 +1869,15 @@ impl Main {
             .gap_4()
             .child(section_title(
                 "Профили WARP",
-                "Как WireGuard доезжает до WARP: порт, эндпоинт, мусорные пакеты. Проверка идёт без TUN — перед тестом отключите другой VPN.",
+                &format!(
+                    "Профиль — как маскируется WireGuard. Адрес WARP программа подбирает сама из {} вариантов, сейчас {}. Проверка идёт без TUN — перед тестом отключите другой VPN.",
+                    self.catalog.endpoints.len(),
+                    if self.settings.endpoint.is_empty() {
+                        &self.catalog.endpoints[0]
+                    } else {
+                        &self.settings.endpoint
+                    }
+                ),
             ))
             .child(card().child(actions).when(!enabled && !self.preview, |s| {
                 s.child(text("Менять профиль можно при отключённом соединении.", 13., MUTED))
@@ -2687,13 +2703,19 @@ fn load_results(root: &Path) -> HashMap<usize, Option<u64>> {
     let Ok(items) = serde_json::from_slice::<Vec<serde_json::Value>>(&data) else {
         return HashMap::new();
     };
-    items
-        .iter()
-        .filter_map(|item| {
-            let index = item["index"].as_u64()? as usize;
-            Some((index, item["delay_ms"].as_u64()))
-        })
-        .collect()
+    // У профиля может быть несколько попыток на разных адресах: важна хоть одна удачная.
+    let mut results = HashMap::new();
+    for item in &items {
+        let Some(index) = item["index"].as_u64() else {
+            continue;
+        };
+        let delay = item["delay_ms"].as_u64();
+        let entry = results.entry(index as usize).or_insert(delay);
+        if entry.is_none() {
+            *entry = delay;
+        }
+    }
+    results
 }
 
 fn tail(path: &Path) -> String {
