@@ -17,3 +17,6 @@ android/local.properties
 
 # Android: локальные JDK, Gradle и SDK для сборки
 /android/.toolchain/
+
+# Лицензии кладёт в архив CI; локально появляются после обновления из программы.
+windows/app/licenses/
