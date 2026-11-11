@@ -278,6 +278,7 @@ impl Main {
                 .expect("built-in catalog")
         });
         settings.strategy = settings.strategy.min(catalog.len() - 1);
+        let catalog_changed = !preview && features::sync_catalog(&root, &catalog, &mut settings);
         let worker = Worker::new(root.clone());
         worker.send(Command::Check);
         let tray = if preview {
@@ -354,6 +355,11 @@ impl Main {
             toasts: Vec::new(),
             toast_seq: 0,
         };
+        if catalog_changed {
+            this.log(
+                "Каталог профилей WARP обновился: статистика и выбор профиля сброшены.".into(),
+            );
+        }
         if this.settings.check_updates
             && (!preview || std::env::var_os("WARP_PREVIEW_UPDATE").is_some())
         {

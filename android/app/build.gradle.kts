@@ -73,7 +73,17 @@ android {
         compose = true
         buildConfig = true
     }
+    // Общие с Windows каталоги: профили WARP и способы регистрации берутся из windows/app/config.
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/sharedAssets"))
 }
+
+val sharedAssets = tasks.register<Copy>("sharedAssets") {
+    from("../../windows/app/config") {
+        include("strategies.json", "registration.json")
+    }
+    into(layout.buildDirectory.dir("generated/sharedAssets"))
+}
+tasks.named("preBuild") { dependsOn(sharedAssets) }
 
 dependencies {
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

@@ -13,12 +13,16 @@ data class Strategy(
     val jmax: Int,
 )
 
+/**
+ * Каталог общий с Windows (windows/app/config/strategies.json копируется при сборке). Профили с
+ * полем `zapret` используют winws и есть только в Windows-версии — здесь они пропускаются.
+ */
 object Strategies {
-    fun load(context: Context): List<Strategy> {
-        val json = context.assets.open("strategies.json").bufferedReader().use { it.readText() }
+    fun load(context: Context): List<Strategy> = parse(context.assets.open("strategies.json").bufferedReader().use { it.readText() })
+
+    internal fun parse(json: String): List<Strategy> {
         val array = JSONArray(json)
-        return (0 until array.length()).map {
-            val item = array.getJSONObject(it)
+        return (0 until array.length()).map { array.getJSONObject(it) }.filter { !it.has("zapret") }.map { item ->
             Strategy(
                 name = item.getString("name").removePrefix("WARP · "),
                 endpoint = item.getString("endpoint"),
@@ -29,4 +33,7 @@ object Strategies {
             )
         }
     }
+
+    /** Отпечаток каталога: при смене профилей статистика и выбор по номеру сбрасываются. */
+    fun fingerprint(list: List<Strategy>): String = list.joinToString("|").hashCode().toUInt().toString(16)
 }

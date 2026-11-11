@@ -1,0 +1,98 @@
+[
+  {
+    "name": "фейк + перестановка · TTL 6",
+    "winws": [
+      "--dpi-desync=fake,disorder2",
+      "--dpi-desync-split-pos=1",
+      "--dpi-desync-ttl=6",
+      "--dpi-desync-fooling=badsum",
+      "--dpi-desync-fake-tls={zapret}/tls_clienthello_www_google_com.bin"
+    ],
+    "byedpi": [
+      "--fake",
+      "-1",
+      "--ttl",
+      "6",
+      "--disorder",
+      "1"
+    ]
+  },
+  {
+    "name": "разрез на 1-м байте",
+    "winws": [
+      "--dpi-desync=split2",
+      "--dpi-desync-split-pos=1"
+    ],
+    "byedpi": [
+      "--split",
+      "1+s"
+    ]
+  },
+  {
+    "name": "перестановка на 1-м байте",
+    "winws": [
+      "--dpi-desync=disorder2",
+      "--dpi-desync-split-pos=1"
+    ],
+    "byedpi": [
+      "--disorder",
+      "1"
+    ]
+  },
+  {
+    "name": "разрез + перестановка",
+    "winws": [
+      "--dpi-desync=multidisorder",
+      "--dpi-desync-split-pos=1,3"
+    ],
+    "byedpi": [
+      "--split",
+      "1+s",
+      "--disorder",
+      "3+s"
+    ]
+  },
+  {
+    "name": "фейк · TTL 8",
+    "winws": [
+      "--dpi-desync=fake",
+      "--dpi-desync-ttl=8",
+      "--dpi-desync-fake-tls={zapret}/tls_clienthello_www_google_com.bin"
+    ],
+    "byedpi": [
+      "--fake",
+      "-1",
+      "--ttl",
+      "8"
+    ]
+  },
+  {
+    "name": "разрез по домену",
+    "winws": [
+      "--dpi-desync=multisplit",
+      "--dpi-desync-split-pos=1,midsld"
+    ],
+    "byedpi": [
+      "--split",
+      "2",
+      "--tlsrec",
+      "1+s"
+    ]
+  },
+  {
+    "name": "TLS-запись + разрез",
+    "byedpi": [
+      "--tlsrec",
+      "3+s",
+      "--split",
+      "1+s"
+    ]
+  },
+  {
+    "name": "OOB",
+    "byedpi": [
+      "--oob",
+      "1"
+    ]
+  }
+]

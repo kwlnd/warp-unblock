@@ -5,6 +5,7 @@ mod features;
 mod glow;
 mod opera;
 mod platform;
+mod registration;
 mod strategies;
 mod tray;
 mod ui;

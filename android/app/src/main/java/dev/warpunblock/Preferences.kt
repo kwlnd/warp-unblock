@@ -76,6 +76,9 @@ object ProfileStats {
             key.toInt() to ProfileStat(v.getLong("attempts"), v.getLong("successes"), v.getLong("total_ms"))
         }
     }.getOrDefault(emptyMap())
+    @Synchronized fun clear(context: Context) {
+        file(context).delete()
+    }
     @Synchronized fun record(context: Context, index: Int, delay: Int?) {
         val all = load(context).toMutableMap()
         val old = all[index] ?: ProfileStat()

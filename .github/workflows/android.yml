@@ -4,9 +4,9 @@ on:
   # Проверка на push/PR; релиз собирает release.yml, вызывая этот файл с версией.
   push:
     branches: [main]
-    paths: ["android/**", ".github/workflows/android.yml"]
+    paths: ["android/**", "windows/app/config/strategies.json", "windows/app/config/registration.json", ".github/workflows/android.yml"]
   pull_request:
-    paths: ["android/**", ".github/workflows/android.yml"]
+    paths: ["android/**", "windows/app/config/strategies.json", "windows/app/config/registration.json", ".github/workflows/android.yml"]
   workflow_call:
     inputs:
       version:

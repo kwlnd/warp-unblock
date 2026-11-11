@@ -35,6 +35,15 @@ object AppState {
     fun init(context: Context) {
         if (::prefs.isInitialized) return
         prefs = context.applicationContext.getSharedPreferences("warp", Context.MODE_PRIVATE)
+        // Каталог профилей сменился: номера в статистике и выборе указывают не туда — сбрасываем.
+        val catalog = Strategies.fingerprint(Strategies.load(context))
+        if (prefs.getString("catalog", null) != catalog) {
+            if (prefs.contains("strategy") || prefs.contains("results")) {
+                prefs.edit().remove("strategy").remove("results").apply()
+                ProfileStats.clear(context)
+            }
+            prefs.edit().putString("catalog", catalog).apply()
+        }
         strategyIndex.value = prefs.getInt("strategy", 0)
         results.value = runCatching {
             val json = JSONObject(prefs.getString("results", "{}") ?: "{}")

@@ -46,6 +46,33 @@ pub fn domains(text: &str) -> Result<String> {
     Ok(entries.into_iter().map(|v| v + "\n").collect())
 }
 
+/// Каталог профилей сменился (новая версия программы или правка strategies.json): статистика
+/// и выбор профиля привязаны к номерам, поэтому они сбрасываются. true — сброс был.
+pub fn sync_catalog(
+    root: &Path,
+    catalog: &[crate::strategies::Strategy],
+    settings: &mut Settings,
+) -> bool {
+    let id = crate::strategies::fingerprint(catalog);
+    let path = root.join("data/catalog-id.txt");
+    let old = fs::read_to_string(&path).ok();
+    if old.as_deref().map(str::trim) == Some(id.as_str()) {
+        return false;
+    }
+    let stats = root.join("data/profile-stats.json");
+    let results = root.join("data/strategy-results.json");
+    let had_state = old.is_some() || stats.exists() || results.exists();
+    if had_state {
+        let _ = fs::remove_file(stats);
+        let _ = fs::remove_file(results);
+        settings.strategy = 0;
+        let _ = settings.save(root);
+    }
+    let _ = fs::create_dir_all(root.join("data"));
+    let _ = fs::write(path, id);
+    had_state
+}
+
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct Stat {
     pub attempts: u64,

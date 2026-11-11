@@ -206,7 +206,7 @@ fn yes() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            strategy: 3,
+            strategy: 0,
             custom_args: String::new(),
             custom: false,
             autostart: false,
@@ -482,7 +482,7 @@ impl Engine {
             thread::sleep(Duration::from_millis(100));
         }
     }
-    fn script(&mut self, script: &str, extra: &[&str], log: &str) -> Result<()> {
+    fn script(&mut self, script: &str, extra: &[&str], log: &str, timeout: Duration) -> Result<()> {
         self.log(&format!("{script}…"));
         self.job()?;
         let args = [
@@ -507,7 +507,7 @@ impl Engine {
             &self.root.join(format!("data/logs/{log}")),
             &self.root.join("app/config/lists"),
         )?;
-        self.wait(process, Duration::from_secs(600))
+        self.wait(process, timeout)
     }
     fn prepare(&mut self) -> Result<()> {
         self.cancelled()?;
@@ -517,7 +517,7 @@ impl Engine {
         let required = required_files();
         if required.iter().any(|p| !self.root.join(p).is_file()) {
             self.log("Не хватает зависимостей. Скачиваю официальные сборки…");
-            self.script("setup.ps1", &[], "setup.log")?;
+            self.script("setup.ps1", &[], "setup.log", Duration::from_secs(600))?;
         }
         for file in required {
             if !self.root.join(file).is_file() {
@@ -590,45 +590,59 @@ impl Engine {
         } else {
             self.log("Zapret отключён; использую WARP с маскировкой handshake.");
         }
-        // TCP desync is only for first-time account registration, never website traffic.
-        let bootstrap = if !self.root.join("data/warp/wgcf-account.toml").is_file() {
-            Some(self.launch(
-                "app/bin/zapret/winws.exe",
-                &[
-                    "--wf-tcp=443".into(),
-                    "--filter-tcp=443".into(),
-                    format!(
-                        "--hostlist={}",
-                        self.root.join("app/config/lists/warp-hosts.txt").display()
-                    ),
-                    format!(
-                            "--dpi-desync-fake-tls={}",
-                            self.root
-                                .join("app/bin/zapret/tls_clienthello_www_google_com.bin")
-                                .display()
-                        ),
-                    "--dpi-desync=fake,disorder2".into(),
-                    "--dpi-desync-split-pos=1".into(),
-                    "--dpi-desync-ttl=6".into(),
-                    "--dpi-desync-fooling=badsum".into(),
-                ],
-                "registration.log",
-            )?)
-        } else {
-            None
-        };
         self.stage(2, "Настройка профиля WARP");
-        if bootstrap.is_none() && write_profile(&self.root, profile)? {
-            self.item(1, "Профиль WARP готов", true);
-        } else {
-            self.profile_script(profile)?;
-            self.item(1, "Профиль WARP готов", true);
+        if !self.root.join("data/warp/wgcf-account.toml").is_file() {
+            self.register_account(profile)?;
+        } else if !write_profile(&self.root, profile)? {
+            self.profile_script(profile, Duration::from_secs(600))?;
         }
-        drop(bootstrap);
+        self.item(1, "Профиль WARP готов", true);
         self.finish_start(test, port, budget, validate, settings)
     }
 
-    fn profile_script(&mut self, profile: &strategies::Strategy) -> Result<()> {
+    /// Регистрация аккаунта: сначала напрямую, затем по очереди способами обхода DPI из
+    /// общего `registration.json`. TCP-обход действует только на время регистрации.
+    fn register_account(&mut self, profile: &strategies::Strategy) -> Result<()> {
+        let methods = crate::registration::load(&self.root)?;
+        let attempts: Vec<(String, Option<Vec<String>>)> =
+            std::iter::once(("напрямую".to_string(), None))
+                .chain(
+                    methods
+                        .into_iter()
+                        .filter_map(|m| m.winws.map(|args| (m.name, Some(args)))),
+                )
+                .collect();
+        let total = attempts.len();
+        for (index, (name, method)) in attempts.into_iter().enumerate() {
+            self.cancelled()?;
+            self.state(
+                true,
+                &format!("Регистрирую аккаунт WARP · {}/{total} · {name}", index + 1),
+            );
+            let bypass = match &method {
+                Some(args) => {
+                    let args = crate::registration::winws_args(args, &self.root);
+                    let process =
+                        self.launch("app/bin/zapret/winws.exe", &args, "registration.log")?;
+                    self.pause(Duration::from_millis(500))?;
+                    Some(process)
+                }
+                None => None,
+            };
+            let result = self.profile_script(profile, Duration::from_secs(30));
+            drop(bypass);
+            if result.is_ok() && self.root.join("data/warp/wgcf-account.toml").is_file() {
+                self.log(&format!("Аккаунт WARP зарегистрирован ({name})."));
+                return Ok(());
+            }
+            self.log(&format!("Регистрация не прошла ({name})."));
+        }
+        bail!(
+            "Не удалось зарегистрировать аккаунт WARP ни одним способом.              Импортируйте копию аккаунта или профиль с другого устройства."
+        )
+    }
+
+    fn profile_script(&mut self, profile: &strategies::Strategy, timeout: Duration) -> Result<()> {
         let parameters = [
             "-Action".to_string(),
             "register".into(),
@@ -647,6 +661,7 @@ impl Engine {
             "warp.ps1",
             &parameters.iter().map(String::as_str).collect::<Vec<_>>(),
             "profile.log",
+            timeout,
         )
     }
 
@@ -1016,8 +1031,17 @@ pub fn self_test(root: &Path) -> Result<()> {
             bail!("Config paths/default route invalid");
         }
         let job = Job::new()?;
-        for profile in strategies::load(root)? {
-            let mut args = strategies::args(&profile, root);
+        // Профили WARP и способы регистрации: winws должен принять каждый набор аргументов.
+        let profiles = strategies::load(root)?
+            .into_iter()
+            .map(|p| (p.name.clone(), strategies::args(&p, root)));
+        let methods = crate::registration::load(root)?
+            .into_iter()
+            .filter_map(|m| {
+                let args = crate::registration::winws_args(m.winws.as_deref()?, root);
+                Some((format!("регистрация: {}", m.name), args))
+            });
+        for (name, mut args) in profiles.chain(methods) {
             if args.is_empty() {
                 continue;
             }
@@ -1033,12 +1057,12 @@ pub fn self_test(root: &Path) -> Result<()> {
             let deadline = Instant::now() + Duration::from_secs(5);
             while process.exit_code()?.is_none() {
                 if Instant::now() > deadline {
-                    bail!("winws dry-run timed out: {}", profile.name);
+                    bail!("winws dry-run timed out: {name}");
                 }
                 thread::sleep(Duration::from_millis(50));
             }
             if process.exit_code()? != Some(0) {
-                bail!("winws rejected profile: {}", profile.name);
+                bail!("winws rejected profile: {name}");
             }
         }
         let process = Process::spawn(
@@ -1201,10 +1225,7 @@ mod tests {
             jc: 4,
             jmin: 40,
             jmax: 70,
-            winws: false,
-            repeats: 0,
-            ttl: 0,
-            cutoff: 0,
+            zapret: None,
         };
         assert!(
             !write_profile(&root, &profile).unwrap(),
