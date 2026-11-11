@@ -7,21 +7,21 @@
 **YouTube, Discord, Telegram и другие заблокированные сервисы — через Cloudflare WARP.**<br>
 Остальной интернет работает напрямую, как обычно.
 
-[![Последняя версия](https://img.shields.io/github/v/release/kwlnd/warp-unblock?style=for-the-badge&color=fd8119&label=версия)](https://github.com/kwlnd/warp-unblock/releases/latest)
-[![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=for-the-badge&logo=windows&logoColor=white)](windows/README.md)
-[![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](android/README.md)
-[![Лицензия MIT](https://img.shields.io/badge/лицензия-MIT-171b23?style=for-the-badge)](LICENSE)
+[![Последняя версия](https://img.shields.io/github/v/release/kwlnd/warp-unblock?style=flat&color=fd8119&label=версия)](https://github.com/kwlnd/warp-unblock/releases/latest)
+[![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat&logo=windows&logoColor=white)](windows/README.md)
+[![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?style=flat&logo=android&logoColor=white)](android/README.md)
+[![Лицензия MIT](https://img.shields.io/badge/лицензия-MIT-171b23?style=flat)](LICENSE)
 
-[![Windows build](https://img.shields.io/github/actions/workflow/status/kwlnd/warp-unblock/windows.yml?branch=main&style=flat-square&logo=github&label=Windows%20build)](https://github.com/kwlnd/warp-unblock/actions/workflows/windows.yml)
-[![Android build](https://img.shields.io/github/actions/workflow/status/kwlnd/warp-unblock/android.yml?branch=main&style=flat-square&logo=github&label=Android%20build)](https://github.com/kwlnd/warp-unblock/actions/workflows/android.yml)
-[![Rust](https://img.shields.io/badge/Rust-GPUI-000000?style=flat-square&logo=rust&logoColor=white)](docs/DEVELOPMENT.md)
-[![Kotlin](https://img.shields.io/badge/Kotlin-Compose-7F52FF?style=flat-square&logo=kotlin&logoColor=white)](docs/DEVELOPMENT.md)
-[![mihomo](https://img.shields.io/badge/ядро-mihomo-fd8119?style=flat-square)](https://github.com/MetaCubeX/mihomo)
+[![Windows build](https://img.shields.io/github/actions/workflow/status/kwlnd/warp-unblock/windows.yml?branch=main&style=flat&logo=github&label=Windows%20build)](https://github.com/kwlnd/warp-unblock/actions/workflows/windows.yml)
+[![Android build](https://img.shields.io/github/actions/workflow/status/kwlnd/warp-unblock/android.yml?branch=main&style=flat&logo=github&label=Android%20build)](https://github.com/kwlnd/warp-unblock/actions/workflows/android.yml)
+[![Rust](https://img.shields.io/badge/Rust-GPUI-000000?style=flat&logo=rust&logoColor=white)](docs/DEVELOPMENT.md)
+[![Kotlin](https://img.shields.io/badge/Kotlin-Compose-7F52FF?style=flat&logo=kotlin&logoColor=white)](docs/DEVELOPMENT.md)
+[![mihomo](https://img.shields.io/badge/ядро-mihomo-fd8119?style=flat)](https://github.com/MetaCubeX/mihomo)
 
 ### Скачать
 
-[![Скачать для Windows](https://img.shields.io/badge/Скачать-Windows%20x64%20·%20ZIP-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/kwlnd/warp-unblock/releases/latest)
-[![Скачать для Android](https://img.shields.io/badge/Скачать-Android%20·%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/kwlnd/warp-unblock/releases/latest)
+[![Скачать для Windows](https://img.shields.io/badge/Скачать-Windows%20x64%20·%20ZIP-0078D4?style=flat&logo=windows&logoColor=white)](https://github.com/kwlnd/warp-unblock/releases/latest)
+[![Скачать для Android](https://img.shields.io/badge/Скачать-Android%20·%20APK-3DDC84?style=flat&logo=android&logoColor=white)](https://github.com/kwlnd/warp-unblock/releases/latest)
 
 </div>
 
