@@ -2,11 +2,11 @@
 
 Портативный клиент Windows x64. Выбранные домены идут через WARP, AI-сервисы — через Opera EU поверх WARP, остальной трафик по умолчанию — напрямую.
 
-**[Скачать Windows v0.7.2](https://github.com/kwlnd/warp-unblock/releases/tag/v0.7.2) · [Все релизы](https://github.com/kwlnd/warp-unblock/releases) · [Android](../android/README.md)**
+**[Скачать Windows v0.7.3](https://github.com/kwlnd/warp-unblock/releases/tag/v0.7.3) · [Все релизы](https://github.com/kwlnd/warp-unblock/releases) · [Android](../android/README.md)**
 
 ## Установка и подключение
 
-1. Скачайте `WarpUnblock-v0.7.2-win-x64.zip` со страницы релиза.
+1. Скачайте `WarpUnblock-v0.7.3-win-x64.zip` со страницы релиза.
 2. Распакуйте архив целиком в отдельную папку с доступом на запись. Папка `app` должна оставаться рядом с `WarpUnblock.exe`.
 3. Запустите EXE и подтвердите права администратора.
 4. Отключите TUN другого VPN-клиента, если он включён.
