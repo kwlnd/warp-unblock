@@ -2,14 +2,14 @@
 
 Клиент для Android 7.0 и новее. Выбранные домены идут через Cloudflare WARP, остальной трафик по умолчанию — напрямую. Root не требуется.
 
-**[Скачать Android v0.7.3](https://github.com/kwlnd/warp-unblock/releases/tag/v0.7.3) · [Все релизы](https://github.com/kwlnd/warp-unblock/releases) · [Windows-версия](../windows/README.md)**
+**[Скачать Android v0.7.4](https://github.com/kwlnd/warp-unblock/releases/tag/v0.7.4) · [Все релизы](https://github.com/kwlnd/warp-unblock/releases) · [Windows-версия](../windows/README.md)**
 
 ## Какой APK скачать
 
 | Файл | Устройство |
 | --- | --- |
-| [arm64-v8a](https://github.com/kwlnd/warp-unblock/releases/download/v0.7.3/WarpUnblock-android-v0.7.3-arm64-v8a.apk) | Большинство современных телефонов |
-| [armeabi-v7a](https://github.com/kwlnd/warp-unblock/releases/download/v0.7.3/WarpUnblock-android-v0.7.3-armeabi-v7a.apk) | Старые 32-битные устройства |
+| [arm64-v8a](https://github.com/kwlnd/warp-unblock/releases/download/v0.7.4/WarpUnblock-android-v0.7.4-arm64-v8a.apk) | Большинство современных телефонов |
+| [armeabi-v7a](https://github.com/kwlnd/warp-unblock/releases/download/v0.7.4/WarpUnblock-android-v0.7.4-armeabi-v7a.apk) | Старые 32-битные устройства |
 
 Контрольные суммы находятся в `SHA256SUMS.txt` на странице релиза.
 
@@ -29,7 +29,7 @@
 
 На телефоне вручную проверены базовые сценарии: регистрация WARP с обходом DPI через ByeDPI, автоподбор, подключение, голос Discord и работа обычного интернета. Это проверка конкретного устройства и подключения, а не всех операторов и оболочек.
 
-Для v0.7.3 прошли 8 unit-тестов, сборки двух APK и Android Lint. Новый интерфейс (общий стиль с Windows: палитра, шрифт Manrope, иконки Lucide, светлая и тёмная тема по системе) проверен снимками экранов в Robolectric; на телефоне ещё не проверен. Новые настройки — выбор приложений, автозапуск, Always-on, камера QR и отправка журнала — реализованы, но ещё требуют практической проверки на телефонах. Длительная работа, переключение сетей и игровой голос отдельно не проверены.
+Для v0.7.4 прошли 8 unit-тестов, сборки двух APK и Android Lint. Новый интерфейс (общий стиль с Windows: палитра, шрифт Manrope, иконки Lucide, светлая и тёмная тема по системе) проверен снимками экранов в Robolectric; на телефоне ещё не проверен. Новые настройки — выбор приложений, автозапуск, Always-on, камера QR и отправка журнала — реализованы, но ещё требуют практической проверки на телефонах. Длительная работа, переключение сетей и игровой голос отдельно не проверены.
 
 ## Если не проходит регистрация WARP
 
