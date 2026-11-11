@@ -21,6 +21,10 @@ class Preferences(context: Context) {
     var checkUpdates: Boolean
         get() = prefs.getBoolean("check_updates", true)
         set(value) { prefs.edit().putBoolean("check_updates", value).apply() }
+    /** Ренат мод — пасхалка: фото на фоне, радуга и «моггерские» надписи. */
+    var renat: Boolean
+        get() = prefs.getBoolean("renat", false)
+        set(value) { prefs.edit().putBoolean("renat", value).apply() }
     var skipVersion: String
         get() = prefs.getString("skip_version", "") ?: ""
         set(value) { prefs.edit().putString("skip_version", value).apply() }

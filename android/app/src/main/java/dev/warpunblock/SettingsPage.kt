@@ -123,6 +123,16 @@ internal fun SettingsPage(locked: Boolean) {
     }
     WarpCard {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Оформление", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Ренат мод", Modifier.weight(1f))
+                Switch(Mog.on, { Mog.on = it; prefs.renat = it })
+            }
+            Text("Радужная кнопка, фото на фоне и особые надписи.", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    WarpCard {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Версия ${BuildConfig.VERSION_NAME}", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Проверять обновления при запуске", Modifier.weight(1f))

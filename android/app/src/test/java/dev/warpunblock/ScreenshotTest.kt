@@ -46,6 +46,23 @@ class ScreenshotTest {
     }
 
     @Test
+    fun homeBusyLight() {
+        AppState.set(UiState(Phase.BUSY, "Подключаю…"))
+        shot("home-busy-light", night = false, tab = 0)
+    }
+
+    @Test
+    fun homeRenat() {
+        Mog.on = true
+        try {
+            AppState.set(UiState(Phase.CONNECTED, "Обход работает", "WARP отвечает"))
+            shot("home-renat", night = true, tab = 0)
+        } finally {
+            Mog.on = false
+        }
+    }
+
+    @Test
     fun profilesDark() {
         AppState.set(UiState())
         shot("profiles-dark", night = true, tab = 1)

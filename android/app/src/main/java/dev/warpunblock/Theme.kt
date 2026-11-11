@@ -7,6 +7,10 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.luminance
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
@@ -62,6 +66,29 @@ val LightPalette = WarpPalette(
     error = Color(0xFFD4343D),
 )
 
+/** Тёмная ли палитра: по светлоте текста (палитра Ренат мода тоже тёмная). */
+val WarpPalette.dark: Boolean get() = text.luminance() > 0.5f
+
+/** Радуга Ренат мода: `hue` 0..1 бежит по кругу, `shift` сдвигает оттенок. */
+fun rainbow(hue: Float, shift: Float = 0f): Color =
+    Color.hsl(((hue + shift) % 1f + 1f) % 1f * 360f, 0.95f, 0.6f)
+
+/** Ренат мод: полупрозрачный фон (сквозь него видно фото), радужные акцент и рамки. */
+fun renatPalette(hue: Float) = WarpPalette(
+    background = Color(0x40080808),
+    sidebar = Color.hsl(288f, 0.6f, 0.06f, 0.6f),
+    surface = Color(0x730A0A0A),
+    surfaceHover = Color.hsl(270f, 0.5f, 0.1f, 0.6f),
+    border = rainbow(hue, 0.5f),
+    text = Color.White,
+    muted = rainbow(hue, 0.25f),
+    accent = rainbow(hue),
+    onAccent = Color(0xFF0A0A0A),
+    ok = DarkPalette.ok,
+    warn = DarkPalette.warn,
+    error = DarkPalette.error,
+)
+
 val LocalPalette = staticCompositionLocalOf { DarkPalette }
 
 /** Manrope вшит в APK (res/font), как и в Windows-версию. */
@@ -87,8 +114,21 @@ private fun typography(): Typography {
 /** Тема следует за системой: светлая или тёмная, без динамических цветов Material You. */
 @Composable
 fun WarpTheme(content: @Composable () -> Unit) {
-    val p = if (isSystemInDarkTheme()) DarkPalette else LightPalette
-    val dark = p == DarkPalette
+    // Радуга Ренат мода: ~15 смен оттенка в секунду, круг за 4 с.
+    val hue by produceState(0f, Mog.on) {
+        if (!Mog.on || Motion.frozen) return@produceState
+        val start = System.nanoTime()
+        while (true) {
+            value = ((System.nanoTime() - start) / 4e9f) % 1f
+            delay(66)
+        }
+    }
+    val p = when {
+        Mog.on -> renatPalette(hue)
+        isSystemInDarkTheme() -> DarkPalette
+        else -> LightPalette
+    }
+    val dark = p.dark
     val common = { s: androidx.compose.material3.ColorScheme ->
         s.copy(
             primary = p.accent, onPrimary = p.onAccent,

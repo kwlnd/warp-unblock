@@ -16,9 +16,13 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,7 +43,6 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -54,7 +57,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -92,6 +101,7 @@ class MainActivity : ComponentActivity() {
         connectIfRequested()
         if (Preferences(this).autoConnect && VpnService.prepare(this) == null && AppState.ui.value.phase == Phase.IDLE) startVpn()
         UpdateState.checkOnStart(this)
+        Mog.on = Preferences(this).renat
         setContent {
             WarpTheme {
                 Screen(
@@ -170,6 +180,16 @@ internal fun Screen(onToggle: () -> Unit, onAuto: () -> Unit, initialTab: Int = 
             snackbar.showSnackbar(message)
         }
     }
+    // Ренат мод: его фото на фоне всего интерфейса, поверхности над ним полупрозрачные.
+    Box(Modifier.fillMaxSize()) {
+    if (Mog.on) {
+        Image(
+            painterResource(renatPhoto(ui)),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize().alpha(0.9f),
+        )
+    }
     Scaffold(
         containerColor = p.background,
         topBar = {
@@ -177,7 +197,16 @@ internal fun Screen(onToggle: () -> Unit, onAuto: () -> Unit, initialTab: Int = 
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = p.sidebar),
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Lucide(R.drawable.ic_lucide_shield_check, p.accent, 20.dp)
+                        if (Mog.on) {
+                            Image(
+                                painterResource(renatPhoto(ui)),
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(22.dp).clip(CircleShape),
+                            )
+                        } else {
+                            Lucide(R.drawable.ic_lucide_shield_check, p.accent, 20.dp)
+                        }
                         Text("WARP Unblock", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = p.text)
                     }
                 },
@@ -266,6 +295,7 @@ internal fun Screen(onToggle: () -> Unit, onAuto: () -> Unit, initialTab: Int = 
             }
         }
     }
+    }
 }
 
 @Composable
@@ -289,45 +319,33 @@ private fun Home(ui: UiState, onToggle: () -> Unit) {
         ui.phase == Phase.CONNECTED -> "Нажмите, чтобы отключиться"
         else -> "Нажмите, чтобы подключиться"
     }
-    // Светящаяся сетка за кнопкой: цвет состояния, при подключении пятна двигаются быстрее.
     val healthy = ui.phase == Phase.CONNECTED && !ui.title.startsWith("Нет связи")
-    val glowColor = when {
-        healthy -> p.accent
-        ui.phase == Phase.BUSY -> androidx.compose.ui.graphics.lerp(p.accent, p.warn, 0.45f)
-        ui.phase == Phase.CONNECTED || ui.phase == Phase.ERROR -> p.error
-        else -> p.accent
-    }
+    val glow = glowStyle(ui, healthy, p)
     WarpCard(
         padding = 22.dp,
-        backdrop = {
-            GlowGrid(
-                mode = when {
-                    healthy -> GlowMode.ON
-                    ui.phase == Phase.BUSY -> GlowMode.WAVES
-                    ui.phase == Phase.CONNECTED || ui.phase == Phase.ERROR -> GlowMode.ERROR
-                    else -> GlowMode.IDLE
-                },
-                color = glowColor,
-                modifier = Modifier.matchParentSize(),
-            )
-        },
+        // В Ренат моде за карточкой его фото, сетка не нужна.
+        backdrop = if (Mog.on) null else { { GlowBackdrop(glow, Modifier.matchParentSize()) } },
     ) {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             PowerButton(ui, onToggle)
             Text(ui.title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = p.text, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
-            Text(hint, fontSize = 13.sp, color = p.muted, textAlign = TextAlign.Center)
+            // Две строки всегда: иначе карточка прыгает по высоте при смене подсказки.
+            Text(hint, fontSize = 13.sp, color = p.muted, textAlign = TextAlign.Center, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
-        ui.batch?.let { (done, total, failed) ->
-            Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Подбор профиля", fontSize = 13.sp, color = p.muted)
-                Text("проверено $done из $total" + if (failed > 0) " · не прошло $failed" else "", fontSize = 13.sp, color = p.text)
+        // Место под подбор профиля есть всегда — по той же причине.
+        Column(Modifier.fillMaxWidth().height(44.dp), verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Bottom)) {
+            ui.batch?.let { (done, total, failed) ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Подбор профиля", fontSize = 13.sp, color = p.muted)
+                    Text("проверено $done из $total" + if (failed > 0) " · не прошло $failed" else "", fontSize = 13.sp, color = p.text)
+                }
+                LinearProgressIndicator(
+                    progress = { done.toFloat() / total.coerceAtLeast(1) },
+                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                    color = p.accent,
+                    trackColor = p.surfaceHover,
+                )
             }
-            LinearProgressIndicator(
-                progress = { done.toFloat() / total.coerceAtLeast(1) },
-                modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-                color = p.accent,
-                trackColor = p.surfaceHover,
-            )
         }
         Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Metric("Время работы", since?.let { uptime(now - it) } ?: "—", R.drawable.ic_lucide_clock, Modifier.weight(1f))
@@ -348,6 +366,48 @@ private fun Home(ui: UiState, onToggle: () -> Unit) {
             }
         }
     }
+}
+
+/** Вид светящейся сетки по состоянию; параметры те же, что в Windows-версии (ui.rs). */
+private fun glowStyle(ui: UiState, healthy: Boolean, p: WarpPalette): GlowStyle {
+    val light = !p.dark
+    val mode = when {
+        healthy -> GlowMode.ON
+        ui.phase == Phase.BUSY -> GlowMode.WAVES
+        ui.phase == Phase.CONNECTED || ui.phase == Phase.ERROR -> GlowMode.ERROR
+        else -> GlowMode.IDLE
+    }
+    val color = when (mode) {
+        // Светлый warn на белом выходит бурым, поэтому там волны в чистом акценте.
+        GlowMode.WAVES -> if (light) p.accent else androidx.compose.ui.graphics.lerp(p.accent, p.warn, 0.45f)
+        GlowMode.ERROR -> p.error
+        // Отключено — сетка без цвета, будто выключена.
+        GlowMode.IDLE -> shift(p.muted, saturation = 0f)
+        GlowMode.ON -> p.accent
+    }
+    return GlowStyle(
+        mode = mode,
+        color = color,
+        // На тёмном фоне гребень светлеет, на белом — насыщается и уходит в золото.
+        hot = if (light) shift(color, hue = 12.6f, saturation = 1.1f, lightness = 0.04f, maxLightness = 0.6f)
+        else shift(color, hue = 14.4f, lightness = 0.24f, maxLightness = 0.9f),
+        // В светлой теме неподвижная сетка нейтрально-серая: оранжевая на белом грязнит.
+        base = if (light) shift(p.muted, saturation = 0f) else color,
+        floor = if (light) 0.055f else 0.045f,
+        lit = if (light) 0.16f else 0.45f,
+        haze = if (light) 0.22f else 0.24f,
+        peak = if (light) 0.85f else 1f,
+    )
+}
+
+/** Сдвиг цвета в HSL: оттенок на `hue` градусов, насыщенность ×`saturation`, светлота +`lightness`. */
+private fun shift(color: Color, hue: Float = 0f, saturation: Float = 1f, lightness: Float = 0f, maxLightness: Float = 1f): Color {
+    val hsl = FloatArray(3)
+    androidx.core.graphics.ColorUtils.colorToHSL(color.toArgb(), hsl)
+    hsl[0] = (hsl[0] + hue) % 360f
+    hsl[1] = (hsl[1] * saturation).coerceIn(0f, 1f)
+    hsl[2] = (hsl[2] + lightness).coerceAtMost(maxLightness)
+    return Color(androidx.core.graphics.ColorUtils.HSLToColor(hsl))
 }
 
 @Composable
