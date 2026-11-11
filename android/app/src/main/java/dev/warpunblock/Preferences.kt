@@ -18,6 +18,10 @@ class Preferences(context: Context) {
     var apps: Set<String>
         get() = prefs.getStringSet("apps", emptySet())!!.toSet()
         set(value) { prefs.edit().putStringSet("apps", value.toSet()).apply() }
+    /** WARP перестал отвечать — подобрать другой профиль и переподключиться самому. */
+    var autoSwitch: Boolean
+        get() = prefs.getBoolean("auto_switch", true)
+        set(value) { prefs.edit().putBoolean("auto_switch", value).apply() }
     var checkUpdates: Boolean
         get() = prefs.getBoolean("check_updates", true)
         set(value) { prefs.edit().putBoolean("check_updates", value).apply() }

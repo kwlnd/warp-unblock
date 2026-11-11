@@ -2115,6 +2115,17 @@ impl Main {
                 },
             ))
             .child(self.switch_row(
+                "auto-switch",
+                "Сам менять профиль",
+                "Если WARP перестал отвечать, подобрать другой профиль и переподключиться. Свои аргументы winws не трогает",
+                self.settings.auto_switch,
+                cx,
+                |this, value| {
+                    this.settings.auto_switch = value;
+                    this.save_settings();
+                },
+            ))
+            .child(self.switch_row(
                 "renat",
                 "Ренат мод",
                 "Радужная кнопка, фон зависит от подключения. Свои картинки: data/renat-on.png и renat-off.png",

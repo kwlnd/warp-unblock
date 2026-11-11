@@ -24,8 +24,25 @@ object Selector {
         thread = Thread { run(app, best) }.also { it.start() }
     }
 
+    /**
+     * Проверка одного профиля отдельным экземпляром ядра на тестовых портах, без VPN.
+     * Возвращает задержку WARP в мс или null. Годится и при живом подключении: основное
+     * ядро слушает свои порты, а приложение исключено из VPN.
+     */
+    internal fun probe(core: Core, strategy: Strategy, account: WarpAccount, budget: Long, alive: () -> Boolean): Int? {
+        core.writeProfile(strategy, account)
+        val test = core.start(true)
+        try {
+            return core.waitDelay(Core.TEST_API_PORT, budget) { test.runningCompat() && alive() }
+        } finally {
+            test.stopCompat()
+            val stopDeadline = System.nanoTime() + 250_000_000L
+            while (test.runningCompat() && System.nanoTime() < stopDeadline) Thread.sleep(10)
+            check(!test.runningCompat()) { "Не удалось остановить тестовое ядро" }
+        }
+    }
+
     private fun run(context: Context, best: Boolean) {
-        var process: Process? = null
         try {
             val core = Core(context)
             core.prepare()
@@ -53,15 +70,7 @@ object Selector {
                         Triple(attempt, strategies.size, failed), selecting = true,
                     ),
                 )
-                core.writeProfile(strategy, account)
-                val test = core.start(true)
-                process = test
-                val delay = core.waitDelay(Core.TEST_API_PORT, budget) { test.runningCompat() && !cancelled }
-                test.stopCompat()
-                val stopDeadline = System.nanoTime() + 250_000_000L
-                while (test.runningCompat() && System.nanoTime() < stopDeadline) Thread.sleep(10)
-                check(!test.runningCompat()) { "Не удалось остановить тестовое ядро" }
-                process = null
+                val delay = probe(core, strategy, account, budget) { !cancelled }
                 if (cancelled) break
                 ProfileStats.record(context, index, delay)
                 results[index] = delay ?: 0
@@ -92,8 +101,6 @@ object Selector {
         } catch (error: Throwable) {
             AppState.log("Ошибка подбора: ${error.message}")
             AppState.set(UiState(Phase.ERROR, "Подбор не удался", error.message ?: ""))
-        } finally {
-            process?.stopCompat()
         }
     }
 }

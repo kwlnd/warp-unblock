@@ -23,6 +23,7 @@ class WarpVpnService : VpnService() {
     private var mihomo: Process? = null
     private var tun: ParcelFileDescriptor? = null
     private var tproxy: TProxyService? = null
+    private var account: WarpAccount? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         AppState.init(this)
@@ -55,6 +56,7 @@ class WarpVpnService : VpnService() {
                 }
             }
             if (stopping) return
+            this.account = account
             val strategies = Strategies.load(this)
             val strategy = strategies[AppState.strategyIndex.value.coerceIn(strategies.indices)]
             AppState.log("Профиль: ${strategy.name}")
@@ -131,9 +133,14 @@ class WarpVpnService : VpnService() {
         service.TProxyStartService(config.absolutePath, fd.fd)
     }
 
-    /** Проверка тоннеля раз в 30 секунд; ошибка проверки тоннель не рвёт. */
-    private fun health(core: Core, process: Process) {
+    /**
+     * Проверка тоннеля раз в 30 секунд; ошибка проверки тоннель не рвёт. Два промаха подряд —
+     * и, если включено, поиск другого рабочего профиля с переподключением ядра (TUN остаётся).
+     */
+    private fun health(core: Core, started: Process) {
+        var process = started
         var counter = 0
+        var failures = 0
         while (!stopping && process.runningCompat()) {
             Thread.sleep(1000)
             runCatching {
@@ -145,18 +152,74 @@ class WarpVpnService : VpnService() {
             val delay = core.waitDelay(Core.API_PORT, WarpProbe.CONNECT_BUDGET_MS) { process.runningCompat() && !stopping }
             if (stopping) return
             AppState.delay.value = delay
-            AppState.set(
-                if (delay != null) {
-                    UiState(Phase.CONNECTED, "Обход работает", "WARP отвечает · $delay мс")
-                } else {
-                    UiState(Phase.CONNECTED, "Нет связи с WARP", "Проверка не прошла, повторю через 30 с")
-                },
-            )
+            if (delay != null) {
+                failures = 0
+                AppState.set(UiState(Phase.CONNECTED, "Обход работает", "WARP отвечает · $delay мс"))
+                continue
+            }
+            failures++
+            val auto = Preferences(this).autoSwitch
+            if (failures >= 2 && auto) {
+                failures = 0
+                switchProfile(core)?.let { process = it }
+                continue
+            }
+            // Один промах бывает от сети; второй проверяем уже через 10 с.
+            counter = 20
+            AppState.set(UiState(Phase.CONNECTED, "Нет связи с WARP", if (auto) "Повторю проверку через 10 с" else "Проверка не прошла, повторю через 10 с"))
         }
         if (!stopping) {
             AppState.log("Ядро остановилось")
             shutdown(UiState(Phase.ERROR, "Ядро остановилось", core.logTail(6)))
         }
+    }
+
+    /**
+     * WARP перестал отвечать: проверяет профили, начиная со следующего (сломанный — последним),
+     * и перезапускает основное ядро на первом рабочем. Провайдер обычно режет конкретный адрес
+     * или приём маскировки, а соседний профиль продолжает работать. Возвращает новое ядро.
+     */
+    private fun switchProfile(core: Core): Process? {
+        val account = this.account ?: return null
+        val strategies = Strategies.load(this)
+        val broken = AppState.strategyIndex.value.coerceIn(strategies.indices)
+        AppState.log("WARP не отвечает на профиле «${strategies[broken].name}». Ищу другой рабочий профиль")
+        updateNotification("Ищу другой профиль…")
+        val budget = WarpProbe.pickBudget(ProfileStats.load(this).values)
+        val order = (1..strategies.size).map { (broken + it) % strategies.size }
+        for ((attempt, index) in order.withIndex()) {
+            if (stopping) return null
+            val strategy = strategies[index]
+            AppState.set(UiState(Phase.BUSY, "WARP пропал · ищу профиль", "${attempt + 1}/${strategies.size} · ${strategy.name}"))
+            val delay = runCatching { Selector.probe(core, strategy, account, budget) { !stopping } }.getOrNull()
+            ProfileStats.record(this, index, delay)
+            if (delay == null || stopping) continue
+            AppState.selectStrategy(index)
+            AppState.log("Переключаюсь на профиль «${strategy.name}» ($delay мс)")
+            core.writeProfile(strategy, account)
+            mihomo?.let { old ->
+                old.stopCompat()
+                val deadline = System.nanoTime() + 2_000_000_000L
+                while (old.runningCompat() && System.nanoTime() < deadline) Thread.sleep(20)
+            }
+            val fresh = runCatching { core.start(false) }.getOrElse {
+                AppState.log("Ядро не перезапустилось: ${it.message}")
+                return null
+            }
+            mihomo = fresh
+            val ok = core.waitDelay(Core.API_PORT, WarpProbe.CONNECT_BUDGET_MS) { fresh.runningCompat() && !stopping }
+            AppState.delay.value = ok
+            AppState.set(
+                if (ok != null) UiState(Phase.CONNECTED, "Обход работает", "WARP отвечает · $ok мс")
+                else UiState(Phase.CONNECTED, "Нет связи с WARP", "Новый профиль не ответил, повторю проверку"),
+            )
+            updateNotification("Обход работает")
+            return fresh
+        }
+        AppState.log("Ни один профиль не ответил; повторю позже")
+        AppState.set(UiState(Phase.CONNECTED, "Нет связи с WARP", "Другие профили тоже не ответили, повторю позже"))
+        updateNotification("Нет связи с WARP")
+        return null
     }
 
     private fun shutdown(result: UiState) {

@@ -196,6 +196,9 @@ pub struct Settings {
     /// Тема интерфейса: system, light или dark.
     #[serde(default = "system_theme")]
     pub theme: String,
+    /// WARP перестал отвечать — подобрать другой профиль и переподключиться самому.
+    #[serde(default = "yes")]
+    pub auto_switch: bool,
 }
 fn system_theme() -> String {
     "system".into()
@@ -215,6 +218,7 @@ impl Default for Settings {
             check_updates: true,
             skip_version: String::new(),
             theme: system_theme(),
+            auto_switch: true,
         }
     }
 }
@@ -282,6 +286,8 @@ impl Worker {
                 running: false,
             };
             let mut last_health = Instant::now();
+            // Сколько проверок подряд WARP не ответил.
+            let mut failures = 0u32;
             loop {
                 match commands.recv_timeout(Duration::from_secs(1)) {
                     Ok(Command::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -311,6 +317,7 @@ impl Worker {
                             _ => unreachable!(),
                         };
                         last_health = Instant::now();
+                        failures = 0;
                         if let Err(error) = result {
                             engine.log(&format!("Ошибка: {error:#}"));
                             // A failed health check must not tear down a working TUN.
@@ -339,8 +346,25 @@ impl Worker {
                             engine.state(false, "Компонент завершился");
                         } else if engine.running && last_health.elapsed() >= Duration::from_secs(30)
                         {
-                            engine.refresh_health();
                             last_health = Instant::now();
+                            if engine.refresh_health() {
+                                failures = 0;
+                            } else {
+                                failures += 1;
+                                // Один промах бывает от сети; второй проверяем уже через 10 с.
+                                last_health -= Duration::from_secs(20);
+                                let settings = Settings::load(&engine.root);
+                                if failures >= 2 && settings.auto_switch && !settings.custom {
+                                    failures = 0;
+                                    engine.cancel.store(false, Ordering::Relaxed);
+                                    if let Err(error) = engine.switch_profile(settings) {
+                                        engine.log(&format!("Автопереключение: {error:#}"));
+                                        engine.stop();
+                                        engine.state(false, "Отключено · см. журнал");
+                                    }
+                                    last_health = Instant::now();
+                                }
+                            }
                         }
                     }
                 }
@@ -878,7 +902,30 @@ impl Engine {
         self.item(3, "Opera EU выключена", false);
     }
 
-    fn refresh_health(&mut self) {
+    /// WARP перестал отвечать на текущем профиле: подбор начиная со следующего (сломанный —
+    /// последним) и подключение с найденным. Провайдер обычно режет конкретный адрес или
+    /// приём маскировки, а соседний профиль продолжает работать.
+    fn switch_profile(&mut self, mut settings: Settings) -> Result<()> {
+        let catalog = strategies::load(&self.root)?;
+        let broken = settings.strategy.min(catalog.len() - 1);
+        self.log(&format!(
+            "WARP не отвечает на профиле «{}». Ищу другой рабочий профиль…",
+            catalog[broken].name
+        ));
+        self.state(true, "WARP пропал · ищу другой профиль…");
+        self.stop();
+        settings.strategy = (broken + 1) % catalog.len();
+        self.auto_select(settings, false)?;
+        let settings = Settings::load(&self.root);
+        self.log(&format!(
+            "Переключаюсь на профиль «{}».",
+            catalog[settings.strategy.min(catalog.len() - 1)].name
+        ));
+        self.start(settings, false)
+    }
+
+    /// Проверка живого подключения; `true`, если WARP ответил.
+    fn refresh_health(&mut self) -> bool {
         match self.delay(9090, CONNECT_BUDGET) {
             Ok(delay) => {
                 self.item(2, &format!("WARP отвечает · {delay} мс"), true);
@@ -901,13 +948,16 @@ impl Engine {
                     }
                     Err(_) => {}
                 }
+                true
             }
             Err(error) if !self.cancel.load(Ordering::Relaxed) => {
                 self.item(2, "WARP не отвечает", false);
                 self.log(&format!("Проверка соединения: {error:#}"));
                 self.state(false, "Нет связи с WARP");
+                false
             }
-            Err(_) => {}
+            // Отмена (пользователь остановил подключение) — не повод переключать профиль.
+            Err(_) => true,
         }
     }
 

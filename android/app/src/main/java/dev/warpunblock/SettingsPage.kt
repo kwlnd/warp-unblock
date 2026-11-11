@@ -69,6 +69,7 @@ internal fun SettingsPage(locked: Boolean) {
     var selected by remember { mutableStateOf(prefs.apps) }
     var message by remember { mutableStateOf("") }
     var checkUpdates by remember { mutableStateOf(prefs.checkUpdates) }
+    var autoSwitch by remember { mutableStateOf(prefs.autoSwitch) }
     val checking by UpdateState.checking.collectAsState()
     val available by UpdateState.available.collectAsState()
     val updateMessage by UpdateState.message.collectAsState()
@@ -94,6 +95,10 @@ internal fun SettingsPage(locked: Boolean) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("После загрузки телефона", Modifier.weight(1f))
                 Switch(boot, { boot = it; prefs.boot = it }, enabled = !locked)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Сам менять профиль, если WARP перестал отвечать", Modifier.weight(1f))
+                Switch(autoSwitch, { autoSwitch = it; prefs.autoSwitch = it })
             }
             Text("Сначала подключитесь вручную и разрешите VPN. Некоторые оболочки требуют разрешения автозапуска и отключения экономии батареи.")
             TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) }) { Text("Системные настройки VPN") }
