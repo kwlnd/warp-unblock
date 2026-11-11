@@ -5,8 +5,9 @@
 ## Структура и релизы
 
 - Монорепо: только ветка `main`, папки `windows/` и `android/` (ветки `android`, `monorepo`, `ccr-*` удалены, PR #18 смержен).
-- Релиз один на обе платформы: тег `vX.Y.Z` → `.github/workflows/release.yml` вызывает `windows.yml` и `android.yml`, публикует ZIP, два APK, `SHA256SUMS.txt` (и `.sha256` для ZIP — его читает апдейтер Windows). Версия общая; Android `versionCode` = major·10000+minor·100+patch (у android-v0.3.1 было 10).
+- Релиз один на обе платформы: тег `vX.Y.Z` → `.github/workflows/release.yml` вызывает `windows.yml` и `android.yml`, публикует ZIP, два APK (`arm64-v8a` и `universal`; отдельный `armeabi-v7a` с v0.7.6 не публикуется, апдейтер на 32-битных берёт universal), `SHA256SUMS.txt` (и `.sha256` для ZIP — его читает апдейтер Windows). Версия общая; Android `versionCode` = major·10000+minor·100+patch (у android-v0.3.1 было 10).
 - Выпущены: Windows v0.6.0 (отдельно, до объединения), общие v0.7.0, v0.7.1 (светящаяся сетка, AI-домены только через Opera) v0.7.2 (свечение, переходы, Android-паритет) и v0.7.3 (прокси с 7890 на 5630), v0.7.4 (автопереключение, CPU, работа в фоне на Xiaomi, новые адреса). «Что нового» дописано к обоим релизам вручную после CI (ренат мод не упомянут). Старые релизы не удалять — решение пользователя.
+- README (корень, windows/, android/) без ссылок на конкретные версии — только на releases/latest; при подготовке релиза их больше не править. Корневой — с бейджами shields.io.
 - Архив Windows: в корне `README.md` и папка `WarpUnblock/` (exe + `app/`, лицензии в `app/licenses/*.txt`). Пользователь просил не класть кучу .md.
 
 ## Windows (GPUI)

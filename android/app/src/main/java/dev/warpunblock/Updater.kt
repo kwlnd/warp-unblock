@@ -42,8 +42,11 @@ object Updater {
     private const val API = "https://api.github.com/repos/kwlnd/warp-unblock/releases?per_page=100&page="
     private const val MAX_APK = 200L * 1024 * 1024
 
-    /** ABI, под которые публикуются APK, в порядке предпочтения телефона. */
-    fun abis(): List<String> = Build.SUPPORTED_ABIS.filter { it == "arm64-v8a" || it == "armeabi-v7a" }
+    /**
+     * Суффиксы APK в порядке предпочтения: свой ABI, затем universal (с v0.7.6 отдельного
+     * armeabi-v7a в релизах нет — 32-битные устройства получают universal).
+     */
+    fun abis(): List<String> = Build.SUPPORTED_ABIS.filter { it == "arm64-v8a" || it == "armeabi-v7a" } + "universal"
 
     /** Версия из тега: общий `v0.7.0` или старый `android-v0.3.1`; иначе null. */
     internal fun tagVersion(tag: String): List<Int>? {

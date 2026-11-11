@@ -37,6 +37,15 @@ class UpdaterTest {
         assertNull(Updater.pick(list, listOf("x86_64"), "0.3.1"))
     }
 
+    @Test fun thirtyTwoBitDevicesGetUniversalOnceV7aIsGone() {
+        val list = JSONArray(listOf(
+            release("v0.7.5", apks("0.7.5")),
+            release("v0.7.6", listOf("WarpUnblock-android-v0.7.6-arm64-v8a.apk", "WarpUnblock-android-v0.7.6-universal.apk", "SHA256SUMS.txt")),
+        ))
+        assertEquals("WarpUnblock-android-v0.7.6-universal.apk", Updater.pick(list, listOf("armeabi-v7a", "universal"), "0.7.4")!!.apkName)
+        assertEquals("WarpUnblock-android-v0.7.6-arm64-v8a.apk", Updater.pick(list, listOf("arm64-v8a", "armeabi-v7a", "universal"), "0.7.4")!!.apkName)
+    }
+
     @Test fun acceptsCombinedReleasesWithAndroidApks() {
         val list = JSONArray(listOf(
             release("android-v0.3.1", apks("0.3.1")),

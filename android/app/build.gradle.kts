@@ -41,13 +41,14 @@ android {
         }
     }
 
-    // Два APK: arm64-v8a и armeabi-v7a.
+    // APK под arm64-v8a и universal (arm64 + armeabi-v7a: ТВ-приставки и 32-битные системы).
+    // Отдельный armeabi-v7a тоже собирается, но в релиз не идёт.
     splits {
         abi {
             isEnable = true
             reset()
             include("arm64-v8a", "armeabi-v7a")
-            isUniversalApk = false
+            isUniversalApk = true
         }
     }
 

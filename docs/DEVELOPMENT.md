@@ -78,6 +78,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1
 
 С Linux можно проверять типы под Windows: `cargo check --target x86_64-pc-windows-gnu` (нужен `gcc-mingw-w64-x86-64`). Это не запускает приложение — ничего из WinAPI там не выполняется.
 
+### Android
+
+Kotlin + Compose, исходники в `android/`. Нужны JDK 17, Gradle 8.9 и Android SDK 34; их можно положить в `android/.toolchain/` (`jdk17/`, `gradle/gradle-8.9/`, `sdk/` с `platforms;android-34` и `build-tools;34.0.0`; папка в .gitignore), тогда ничего не ставится в систему:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File android/tools/build.ps1
+```
+
+По умолчанию — unit-тесты, релизные APK и Lint. Снимки экранов без телефона: `-Tasks testDebugUnitTest,'-Pscreenshots=1'` → `android/app/build/screenshots/`. Рабочему APK нужны нативные библиотеки (mihomo, hev-socks5-tunnel, ByeDPI) в `android/app/src/main/jniLibs/<abi>/` — их собирает CI, локальный APK без них не подключится. APK подписываются ключом проекта `android/hobby-signing.jks`, чтобы обновления вставали поверх. Релиз содержит `arm64-v8a` и `universal` (arm64 + armeabi-v7a); отдельный `armeabi-v7a` собирается, но не публикуется. Иконки интерфейса — Lucide (`android/tools/lucide-to-vector.py`), иконка приложения — `tools/make-icons.py`.
+
 ## Релизы
 
 `.github/workflows/windows.yml` собирает exe на `windows-latest`; при вызове из `release.yml` упаковывает `WarpUnblock-<версия>-win-x64.zip`: в корне `README.md` и папка `WarpUnblock/` (exe и `app/`, лицензии — в `app/licenses/`), рядом `.sha256`. Релиз запускается пушем тега `v*` или вручную в Actions (Release, поле версии).

@@ -96,7 +96,8 @@ jobs:
         run: |
           set -e
           mkdir dist
-          for abi in arm64-v8a armeabi-v7a; do
+          # В релиз: arm64-v8a (почти все телефоны) и universal (ТВ-приставки, 32-битные системы).
+          for abi in arm64-v8a universal; do
             src="android/app/build/outputs/apk/release/app-$abi-release.apk"
             test -f "$src"
             cp "$src" "dist/WarpUnblock-android-v${{ steps.ver.outputs.name }}-$abi.apk"
