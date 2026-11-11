@@ -9,8 +9,9 @@ param(
     [ValidateSet("register", "check")][string]$Action,
     [int]$Port = 9090,
     [int]$Timeout = 30,
-    [ValidateSet("162.159.192.1", "162.159.193.1")][string]$EndpointIp = "162.159.192.1",
-    [ValidateSet(500,1701,2408,4500)][int]$EndpointPort = 2408,
+    # Адрес из пула каталога (strategies.json); программа проверяет его подсеть до вызова скрипта.
+    [ValidatePattern('^(162\.159\.(192|193|195|204)|188\.114\.(9[6-9]))\.\d{1,3}$')][string]$EndpointIp = "162.159.192.1",
+    [ValidateRange(1,65535)][int]$EndpointPort = 2408,
     [ValidateRange(0,32)][int]$Jc = 4,
     [ValidateRange(0,1280)][int]$Jmin = 40,
     [ValidateRange(0,1280)][int]$Jmax = 70

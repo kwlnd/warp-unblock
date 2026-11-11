@@ -624,17 +624,24 @@ impl Engine {
             self.log("Zapret отключён; использую WARP с маскировкой handshake.");
         }
         self.stage(2, "Настройка профиля WARP");
-        if !self.root.join("data/warp/wgcf-account.toml").is_file() {
-            self.register_account(profile)?;
-        } else if !write_profile(&self.root, profile)? {
-            self.profile_script(profile, Duration::from_secs(600))?;
-        }
+        self.ensure_profile(profile)?;
         self.item(1, "Профиль WARP готов", true);
         self.finish_start(test, port, budget, validate, settings)
     }
 
-    /// Регистрация аккаунта: сначала напрямую, затем по очереди способами обхода DPI из
-    /// общего `registration.json`. TCP-обход действует только на время регистрации.
+    /// Нет аккаунта или профиля WireGuard — получаем их у API Cloudflare с теми же обходами DPI,
+    /// что и при регистрации: у части провайдеров API без них не отвечает (TLS-таймаут).
+    fn ensure_profile(&mut self, profile: &strategies::Strategy) -> Result<()> {
+        if self.root.join("data/warp/wgcf-account.toml").is_file()
+            && write_profile(&self.root, profile)?
+        {
+            return Ok(());
+        }
+        self.register_account(profile)
+    }
+
+    /// Регистрация аккаунта и получение профиля WireGuard: сначала напрямую, затем по очереди
+    /// способами обхода DPI из общего `registration.json`. TCP-обход действует только на это время.
     fn register_account(&mut self, profile: &strategies::Strategy) -> Result<()> {
         let methods = crate::registration::load(&self.root)?;
         let attempts: Vec<(String, Option<Vec<String>>)> =
@@ -650,7 +657,7 @@ impl Engine {
             self.cancelled()?;
             self.state(
                 true,
-                &format!("Регистрирую аккаунт WARP · {}/{total} · {name}", index + 1),
+                &format!("Получаю профиль WARP · {}/{total} · {name}", index + 1),
             );
             let bypass = match &method {
                 Some(args) => {
@@ -664,8 +671,11 @@ impl Engine {
             };
             let result = self.profile_script(profile, Duration::from_secs(30));
             drop(bypass);
-            if result.is_ok() && self.root.join("data/warp/wgcf-account.toml").is_file() {
-                self.log(&format!("Аккаунт WARP зарегистрирован ({name})."));
+            if result.is_ok()
+                && self.root.join("data/warp/wgcf-account.toml").is_file()
+                && self.root.join("data/warp/wgcf-profile.conf").is_file()
+            {
+                self.log(&format!("Аккаунт и профиль WARP получены ({name})."));
                 return Ok(());
             }
             self.log(&format!("Регистрация не прошла ({name})."));
@@ -767,6 +777,9 @@ impl Engine {
             catalog.endpoint_index(&settings.endpoint),
         );
         let total = order.len();
+        // Аккаунт и профиль — один раз до перебора: без них не пройдёт ни одна пара, а повторять
+        // регистрацию со всеми обходами на каждой паре — это часы.
+        self.ensure_profile(&catalog.resolve(order[0].0, order[0].1))?;
         let mut results = Vec::new();
         let mut failed = 0usize;
         let mut candidates = Vec::new();
