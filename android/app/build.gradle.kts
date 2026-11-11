@@ -13,7 +13,7 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
-        versionName = System.getenv("VERSION_NAME") ?: "0.7.1"
+        versionName = System.getenv("VERSION_NAME") ?: "0.7.2"
     }
 
     // Подпись для хобби-проекта: ключ лежит в репозитории, чтобы обновления ставились поверх.

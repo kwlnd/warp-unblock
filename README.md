@@ -8,9 +8,9 @@
 
 | Платформа | Последняя версия | Скачать |
 | --- | --- | --- |
-| Windows x64 | [v0.7.1](https://github.com/kwlnd/warp-unblock/releases/tag/v0.7.1) | [ZIP с приложением](https://github.com/kwlnd/warp-unblock/releases/download/v0.7.1/WarpUnblock-v0.7.1-win-x64.zip) |
-| Android 7.0+, большинство современных телефонов | [v0.7.1](https://github.com/kwlnd/warp-unblock/releases/tag/v0.7.1) | [APK arm64-v8a](https://github.com/kwlnd/warp-unblock/releases/download/v0.7.1/WarpUnblock-android-v0.7.1-arm64-v8a.apk) |
-| Android 7.0+, старые 32-битные устройства | [v0.7.1](https://github.com/kwlnd/warp-unblock/releases/tag/v0.7.1) | [APK armeabi-v7a](https://github.com/kwlnd/warp-unblock/releases/download/v0.7.1/WarpUnblock-android-v0.7.1-armeabi-v7a.apk) |
+| Windows x64 | [v0.7.2](https://github.com/kwlnd/warp-unblock/releases/tag/v0.7.2) | [ZIP с приложением](https://github.com/kwlnd/warp-unblock/releases/download/v0.7.2/WarpUnblock-v0.7.2-win-x64.zip) |
+| Android 7.0+, большинство современных телефонов | [v0.7.2](https://github.com/kwlnd/warp-unblock/releases/tag/v0.7.2) | [APK arm64-v8a](https://github.com/kwlnd/warp-unblock/releases/download/v0.7.2/WarpUnblock-android-v0.7.2-arm64-v8a.apk) |
+| Android 7.0+, старые 32-битные устройства | [v0.7.2](https://github.com/kwlnd/warp-unblock/releases/tag/v0.7.2) | [APK armeabi-v7a](https://github.com/kwlnd/warp-unblock/releases/download/v0.7.2/WarpUnblock-android-v0.7.2-armeabi-v7a.apk) |
 
 С v0.7.0 Windows и Android выходят одним релизом: в нём архив, оба APK и общий файл контрольных сумм `SHA256SUMS.txt`. Для установки нужны файлы из Releases; скачивать исходники через **Code → Download ZIP** не требуется.
 
