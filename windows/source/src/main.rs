@@ -3,6 +3,7 @@
 mod engine;
 mod features;
 mod glow;
+mod mog;
 mod opera;
 mod platform;
 mod registration;

@@ -1,6 +1,7 @@
 //! Светящаяся сетка за главной карточкой. Неподвижная часть (тусклая сетка и ровное свечение
 //! «подключено») запекается в картинку один раз на размер карточки, цвет и масштаб экрана;
-//! каждый кадр рисуются картинка и только живые клетки: пятна, волны, «звёзды».
+//! каждый кадр рисуются мягкое свечение (размытые тени), картинка и только живые клетки:
+//! пятна, волны, «звёзды».
 use gpui_kit::*;
 use std::sync::Arc;
 
@@ -8,7 +9,7 @@ use std::sync::Arc;
 pub enum Mode {
     /// Простой: плывут мягкие пятна.
     Idle,
-    /// Подключение: резкие волны, каждая в случайном направлении.
+    /// Подключение: светящиеся волны, каждая в случайном направлении.
     Waves,
     /// Подключено: сетка ровно светится, местами подмигивают «звёзды».
     On,
@@ -19,8 +20,6 @@ pub enum Mode {
 const STEP: f32 = 7.;
 const CELL: f32 = 4.;
 const RADIUS: f32 = 14.;
-/// Яркость запечённой сетки «подключено».
-const LIT: f32 = 0.52;
 /// Живые клетки слабее этого порога не рисуем — их хватает запечённой сетки.
 const VISIBLE: f32 = 0.03;
 
@@ -127,12 +126,118 @@ fn bake(
     Arc::new(RenderImage::new([image::Frame::new(buffer)]))
 }
 
+#[derive(Clone)]
 pub struct Frame {
     pub mode: Mode,
+    /// Цвет живых клеток и свечения.
     pub color: Hsla,
-    pub star: Hsla,
+    /// Самые яркие клетки: гребень волны, середина пятна, «звёзды».
+    pub hot: Hsla,
+    /// Цвет неподвижной тусклой сетки.
+    pub base: Hsla,
+    /// Яркость неподвижной сетки.
     pub floor: f32,
+    /// Яркость запечённой сетки «подключено».
+    pub lit: f32,
+    /// Сила мягкого свечения под клетками.
+    pub haze: f32,
+    /// Предел яркости живых клеток.
+    pub peak: f32,
+    /// Доля слоя при смене состояния: 1 — виден целиком. Прозрачность элемента GPUI
+    /// к canvas не применяется, поэтому гасим сами.
+    pub weight: f32,
     pub time: f32,
+}
+
+/// Сколько секунд прежнее состояние гаснет, а новое проявляется.
+const FADE: f32 = 0.7;
+
+/// Две сетки на время смены состояния: у каждой своя запечённая картинка.
+#[derive(Default)]
+pub struct State {
+    pub current: Cache,
+    pub previous: Cache,
+    last: Option<Frame>,
+    from: Option<Frame>,
+    since: f32,
+}
+
+impl State {
+    /// Запоминает кадр. Пока идёт смена состояния, возвращает прежний кадр и долю нового (0..1).
+    pub fn advance(&mut self, frame: &Frame) -> Option<(Frame, f32)> {
+        if let Some(last) = &self.last {
+            if !last.same_look(frame) {
+                let k = (frame.time - self.since) / FADE;
+                // Промежуточное состояние едва проявилось — просто меняем цель перехода,
+                // иначе прежняя сетка исчезла бы скачком.
+                if self.from.is_none() || k >= 0.5 {
+                    self.from = self.last.take();
+                    self.since = frame.time;
+                    std::mem::swap(&mut self.current, &mut self.previous);
+                }
+            }
+        }
+        self.last = Some(frame.clone());
+        let k = ((frame.time - self.since) / FADE).clamp(0., 1.);
+        if k >= 1. {
+            self.from = None;
+        }
+        let from = self.from.as_ref()?;
+        let k = k * k * (3. - 2. * k);
+        Some((
+            Frame {
+                time: frame.time,
+                weight: 1. - k,
+                ..from.clone()
+            },
+            k,
+        ))
+    }
+}
+
+impl Frame {
+    fn same_look(&self, other: &Frame) -> bool {
+        self.mode == other.mode
+            && self.color == other.color
+            && self.hot == other.hot
+            && self.base == other.base
+            && self.floor == other.floor
+            && self.lit == other.lit
+            && self.haze == other.haze
+            && self.peak == other.peak
+    }
+}
+
+/// Мягкое круглое свечение радиусом `radius`: размытая тень без дырки посередине.
+fn bloom(window: &mut Window, origin: Point<Pixels>, x: f32, y: f32, radius: f32, color: Hsla) {
+    if color.a < 0.005 {
+        return;
+    }
+    let r = radius * 0.45;
+    window.paint_drop_shadows(
+        Bounds::new(
+            point(origin.x + px(x - r), origin.y + px(y - r)),
+            size(px(2. * r), px(2. * r)),
+        ),
+        Corners::all(px(r)),
+        &[BoxShadow {
+            color,
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(r),
+            spread_radius: px(0.),
+            inset: false,
+        }],
+    );
+}
+
+fn mix(a: Hsla, b: Hsla, k: f32) -> Hsla {
+    let k = k.clamp(0., 1.);
+    Hsla {
+        h: a.h + (b.h - a.h) * k,
+        s: a.s + (b.s - a.s) * k,
+        l: a.l + (b.l - a.l) * k,
+        a: a.a + (b.a - a.a) * k,
+    }
 }
 
 pub fn paint(window: &mut Window, bounds: Bounds<Pixels>, cache: &mut Cache, frame: &Frame) {
@@ -146,28 +251,28 @@ pub fn paint(window: &mut Window, bounds: Bounds<Pixels>, cache: &mut Cache, fra
         (width * scale).round() as u32,
         (height * scale).round() as u32,
     );
-    let key = (wd, hd, pack(frame.color), frame.floor.to_bits());
+    let key = (
+        wd,
+        hd,
+        pack(frame.color) ^ pack(frame.base).rotate_left(7),
+        frame.floor.to_bits() ^ frame.lit.to_bits().rotate_left(11),
+    );
     if cache.key != Some(key) {
         for image in [cache.base.take(), cache.lit.take()].into_iter().flatten() {
             let _ = window.drop_image(image);
         }
         cache.cells = layout(width, height);
-        cache.base = Some(bake(&cache.cells, wd, hd, scale, frame.color, frame.floor));
-        cache.lit = Some(bake(&cache.cells, wd, hd, scale, frame.color, LIT));
+        cache.base = Some(bake(&cache.cells, wd, hd, scale, frame.base, frame.floor));
+        cache.lit = Some(bake(&cache.cells, wd, hd, scale, frame.color, frame.lit));
         cache.key = Some(key);
     }
     let corners = Corners::all(px(RADIUS));
-    let baked = if frame.mode == Mode::On {
-        &cache.lit
-    } else {
-        &cache.base
-    };
-    if let Some(image) = baked {
-        let _ = window.paint_image(bounds, bounds, corners, image.clone(), 0, false);
-    }
-
+    let origin = bounds.origin;
     let t = frame.time;
     let scale_min = width.min(height).max(1.);
+    let w = frame.weight.clamp(0., 1.);
+    let haze = frame.haze * w;
+
     let blobs = [
         (
             0.5 + 0.34 * (t * 0.37).sin(),
@@ -188,7 +293,7 @@ pub fn paint(window: &mut Window, bounds: Bounds<Pixels>, cache: &mut Cache, fra
             0.55,
         ),
     ];
-    let period = 0.9f32;
+    let period = 1.1f32;
     let wave = |offset: f32| {
         let n = ((t + offset) / period).floor();
         let phase = ((t + offset) / period).fract();
@@ -196,36 +301,112 @@ pub fn paint(window: &mut Window, bounds: Bounds<Pixels>, cache: &mut Cache, fra
         (angle.cos(), angle.sin(), -0.25 + 1.5 * phase)
     };
     let waves = [wave(0.0), wave(period * 0.5)];
-    if frame.mode == Mode::On {
-        // Ровное свечение «дышит» одним полупрозрачным слоем поверх запечённой сетки.
-        let breathe = 0.04 * (1. + (t * 1.1).sin());
-        window.paint_quad(fill(bounds, frame.color.opacity(breathe)).corner_radii(corners));
+
+    // Свечение лежит под сеткой: клетки поверх него читаются как светящиеся точки.
+    match frame.mode {
+        Mode::Idle | Mode::Error => {
+            for (bx, by, r, strength) in blobs {
+                bloom(
+                    window,
+                    origin,
+                    bx * width,
+                    by * height,
+                    r * scale_min * 2.,
+                    frame.color.opacity(haze * strength),
+                );
+            }
+        }
+        Mode::Waves => {
+            let tint = mix(frame.color, frame.hot, 0.5);
+            for (dx, dy, front) in waves {
+                // Гребень — прямая поперёк направления волны; вдоль неё ряд мягких пятен.
+                let along = (front - 0.5) * 1.42 - 0.03;
+                let (cx, cy) = (0.5 + along * dx, 0.5 + along * dy);
+                let fade = (1. - ((front - 0.5) / 0.8).abs()).clamp(0., 1.).sqrt();
+                for k in -4..=4 {
+                    let s = k as f32 * 0.2;
+                    let (x, y) = ((cx - dy * s) * width, (cy + dx * s) * height);
+                    if x < -80. || y < -80. || x > width + 80. || y > height + 80. {
+                        continue;
+                    }
+                    bloom(
+                        window,
+                        origin,
+                        x,
+                        y,
+                        scale_min * 0.4,
+                        tint.opacity(haze * fade),
+                    );
+                }
+            }
+        }
+        Mode::On => {
+            let breathe = 0.75 + 0.25 * (t * 1.1).sin();
+            bloom(
+                window,
+                origin,
+                width * 0.5,
+                height * 0.36,
+                scale_min * 1.2,
+                frame.color.opacity(haze * breathe),
+            );
+        }
     }
+
+    let (baked, baked_color, baked_alpha) = if frame.mode == Mode::On {
+        (&cache.lit, frame.color, frame.lit)
+    } else {
+        (&cache.base, frame.base, frame.floor)
+    };
+    if w >= 0.999 {
+        if let Some(image) = baked {
+            let _ = window.paint_image(bounds, bounds, corners, image.clone(), 0, false);
+        }
+    } else {
+        // Картинку GPUI не умеет рисовать полупрозрачной: на время перехода сетка — квадами.
+        let color = baked_color.opacity(baked_alpha * baked_color.a * w);
+        for cell in &cache.cells {
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(origin.x + px(cell.x), origin.y + px(cell.y)),
+                    size(px(CELL), px(CELL)),
+                ),
+                color,
+            ));
+        }
+    }
+
     for cell in &cache.cells {
         let (fill_color, alpha) = match frame.mode {
             Mode::Idle | Mode::Error => {
                 let mut glow = 0.0f32;
-                for (bx, by, r, w) in blobs {
+                for (bx, by, r, blob) in blobs {
                     let dx = (cell.x - bx * width) / (r * scale_min);
                     let dy = (cell.y - by * height) / (r * scale_min);
-                    glow += w * (-(dx * dx + dy * dy)).exp();
+                    glow += blob * (-(dx * dx + dy * dy)).exp();
                 }
+                let glow = glow.min(1.).powf(1.5);
                 let strength = if frame.mode == Mode::Idle { 0.8 } else { 1.0 };
-                (frame.color, strength * glow.min(1.).powf(1.5))
+                // Середина пятна теплее и ярче краёв.
+                (
+                    mix(frame.color, frame.hot, glow * glow * 0.6),
+                    strength * glow,
+                )
             }
             Mode::Waves => {
                 let mut glow = 0.0f32;
+                let mut crest = 0.0f32;
                 for (dx, dy, front) in waves {
                     let along = ((cell.u - 0.5) * dx + (cell.v - 0.5) * dy) / 1.42 + 0.5;
                     let d = along - front;
-                    // Резкий передний край и короткий светящийся хвост.
-                    glow += if d > 0. {
-                        (-(d / 0.012).powi(2)).exp()
-                    } else {
-                        (d / 0.09).exp()
-                    };
+                    // Мягкий передний край, яркий гребень и длинный мерцающий хвост.
+                    let edge = (-(d / 0.022).powi(2)).exp();
+                    let tail = if d > 0. { 0. } else { (d / 0.11).exp() };
+                    let sparkle = 0.65 + 0.35 * (t * 7. + cell.seed * 60.).sin();
+                    glow += edge.max(tail * sparkle);
+                    crest = crest.max(edge);
                 }
-                (frame.color, 0.95 * glow.min(1.))
+                (mix(frame.color, frame.hot, crest), glow.min(1.))
             }
             Mode::On => {
                 if cell.seed >= 0.07 {
@@ -235,19 +416,31 @@ pub fn paint(window: &mut Window, bounds: Bounds<Pixels>, cache: &mut Cache, fra
                     .sin()
                     .max(0.))
                 .powf(10.);
-                (
-                    frame.star,
-                    (0.4 + 0.6 * twinkle) * (twinkle > 0.02) as u8 as f32,
-                )
+                // У самого края ореол залез бы на рамку карточки.
+                let edge = cell.x.min(cell.y).min(width - cell.x).min(height - cell.y);
+                if twinkle <= 0.02 || edge < 12. {
+                    continue;
+                }
+                // Яркая «звезда» с мягким ореолом.
+                bloom(
+                    window,
+                    origin,
+                    cell.x + CELL / 2.,
+                    cell.y + CELL / 2.,
+                    14.,
+                    frame.hot.opacity(haze * 1.3 * twinkle),
+                );
+                (frame.hot, 0.4 + 0.6 * twinkle)
             }
         };
+        let alpha = alpha * frame.peak * w;
         if alpha < VISIBLE {
             continue;
         }
         window.paint_quad(
             fill(
                 Bounds::new(
-                    point(bounds.origin.x + px(cell.x), bounds.origin.y + px(cell.y)),
+                    point(origin.x + px(cell.x), origin.y + px(cell.y)),
                     size(px(CELL), px(CELL)),
                 ),
                 fill_color.opacity(alpha.min(1.)),

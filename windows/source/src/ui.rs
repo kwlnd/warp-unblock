@@ -31,6 +31,8 @@ const ON_ACCENT: u32 = 0x1c1004;
 const OK: u32 = 0x4cc38a;
 const WARN: u32 = 0xf0b429;
 const ERROR: u32 = 0xf2666d;
+/// Высота блока с полосками прогресса подбора профиля и этапа подключения.
+const PROGRESS_HEIGHT: f32 = 84.;
 /// Manrope вшит в программу, поэтому выглядит одинаково на любой Windows.
 const FONT: &str = "Manrope";
 const FONT_FILES: [&[u8]; 4] = [
@@ -102,8 +104,31 @@ const RENAT_OFF: [&str; 3] = [
     "app/assets/renat-off.jpg",
 ];
 
+/// Радуга Ренат мода: оттенок бежит по кругу раз в 4 с, `shift` сдвигает его.
+fn rainbow(shift: f32) -> Hsla {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let t = START.get_or_init(Instant::now).elapsed().as_secs_f32();
+    hsla((t * 0.25 + shift).rem_euclid(1.0), 0.95, 0.6, 1.0)
+}
+
 /// Цвет палитры: константы заданы для тёмной темы, светлая подставляет пару.
+/// В Ренат моде фон полупрозрачный (сквозь него видно фото), а акцент и рамки — радуга.
 fn c(hex: u32) -> Hsla {
+    if crate::mog::on() {
+        match hex {
+            BACKGROUND => return hsla(0., 0., 0.03, 0.25),
+            SIDEBAR => return hsla(0.8, 0.6, 0.06, 0.55),
+            SURFACE => return hsla(0., 0., 0.04, 0.45),
+            SURFACE_HOVER => return hsla(0.75, 0.5, 0.1, 0.6),
+            BORDER => return rainbow(0.5),
+            TEXT => return hsla(0., 0., 1., 1.),
+            MUTED => return rainbow(0.25).opacity(0.95),
+            ACCENT => return rainbow(0.),
+            ACCENT_HOVER => return rainbow(0.1),
+            ON_ACCENT => return hsla(0., 0., 0.04, 1.),
+            _ => {}
+        }
+    }
     let hex = if light() {
         match hex {
             BACKGROUND => 0xf4f5f7,
@@ -248,8 +273,8 @@ struct Main {
     pending_update: Option<update::Release>,
     install_after_stop: Option<update::Release>,
     theme_applied: bool,
-    /// Запечённая светящаяся сетка главной карточки.
-    glow_cache: std::rc::Rc<std::cell::RefCell<glow::Cache>>,
+    /// Запечённая светящаяся сетка главной карточки и плавная смена её состояний.
+    glow_cache: std::rc::Rc<std::cell::RefCell<glow::State>>,
     connected_since: Option<Instant>,
     /// Какую команду ждём от движка — для всплывашки с итогом.
     pending: Option<&'static str>,
@@ -596,20 +621,33 @@ impl Main {
             self.quit(cx);
             return;
         }
-        // Только предпросмотр: WARP_PREVIEW_STATE=busy|on|error показывает интерфейс в этом состоянии.
+        // Только предпросмотр: WARP_PREVIEW_STATE=busy|on|error показывает интерфейс в этом состоянии,
+        // cycle — по кругу отключено → подключаю → работает → ошибка, по 3 с (для переходов).
         if self.preview {
-            if let Ok(state) = std::env::var("WARP_PREVIEW_STATE") {
+            if let Ok(mut state) = std::env::var("WARP_PREVIEW_STATE") {
+                if state == "cycle" {
+                    let step = self.started.elapsed().as_secs() / 3 % 4;
+                    state = ["idle", "busy", "on", "error"][step as usize].into();
+                }
                 let all = |ok| std::array::from_fn(|i| (format!("Проверка {i}"), ok));
                 match state.as_str() {
+                    "idle" => {
+                        (self.busy, self.running) = (false, false);
+                        (self.batch, self.stage) = (None, None);
+                    }
                     "busy" => {
-                        (self.busy, self.running, self.status) = (true, false, "Подключаю…".into())
+                        (self.busy, self.running, self.status) = (true, false, "Подключаю…".into());
+                        self.batch = Some((3, 12, 1));
+                        self.stage = Some((2, 6, "Поднимаю TUN".into()));
                     }
                     "on" => {
                         (self.busy, self.running) = (false, true);
+                        (self.batch, self.stage) = (None, None);
                         self.checks = all(true);
                     }
                     "error" => {
                         (self.busy, self.running) = (false, true);
+                        (self.batch, self.stage) = (None, None);
                         self.checks = all(false);
                     }
                     _ => {}
@@ -844,7 +882,7 @@ fn text(value: impl Into<SharedString>, size: f32, color: u32) -> Div {
     div()
         .text_size(px(size))
         .text_color(c(color))
-        .child(value.into())
+        .child(crate::mog::mog(value.into()))
 }
 
 fn card() -> Div {
@@ -881,7 +919,7 @@ fn button(
         .rounded(px(9.))
         .text_size(px(14.))
         .border_1()
-        .child(label.into());
+        .child(crate::mog::mog(label.into()));
     let base = if primary {
         base.bg(accent)
             .border_color(accent)
@@ -911,7 +949,8 @@ fn button(
 fn why(element: Stateful<Div>, reason: Option<&'static str>) -> Stateful<Div> {
     match reason {
         Some(reason) => element.tooltip(move |window, cx| {
-            gpui_kit::component::tooltip::Tooltip::new(reason).build(window, cx)
+            gpui_kit::component::tooltip::Tooltip::new(crate::mog::mog(reason.into()))
+                .build(window, cx)
         }),
         None => element,
     }
@@ -1038,7 +1077,14 @@ impl Main {
                     .gap_2()
                     .pl(px(16.))
                     .window_control_area(WindowControlArea::Drag)
-                    .child(icon("shield-check", 18., c(ACCENT)))
+                    .child(match self.renat_photo() {
+                        Some(path) => img(path)
+                            .size(px(20.))
+                            .rounded_full()
+                            .object_fit(ObjectFit::Cover)
+                            .into_any_element(),
+                        None => icon("shield-check", 18., c(ACCENT)).into_any_element(),
+                    })
                     .child(text("WARP Unblock", 13., TEXT).font_weight(FontWeight::BOLD)),
             )
             // Статус строго по центру окна; слой тоже тянет окно, кнопки лежат поверх.
@@ -1077,7 +1123,7 @@ impl Main {
                                     .overflow_hidden()
                                     .text_ellipsis()
                                     .whitespace_nowrap()
-                                    .child(status),
+                                    .child(crate::mog::mog(status.into())),
                             ),
                     ),
             )
@@ -1121,7 +1167,7 @@ impl Main {
                             FontWeight::NORMAL
                         })
                         .text_color(if active { c(TEXT) } else { c(MUTED) })
-                        .child(label.to_owned()),
+                        .child(crate::mog::mog(label.to_owned().into())),
                 )
         };
         let mut nav = div().flex().flex_col().items_center().gap_1();
@@ -1231,6 +1277,18 @@ impl Main {
             .bg(fill)
             .border_2()
             .border_color(ring)
+            .overflow_hidden()
+            .relative()
+            // Ренат мод: в кнопке тоже его фото.
+            .children(renat.then(|| self.renat_photo()).flatten().map(|path| {
+                img(path)
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .rounded_full()
+                    .object_fit(ObjectFit::Cover)
+                    .opacity(0.8)
+            }))
             .child(icon("power", 50., glyph))
             .when(blocked.is_none(), |s| {
                 s.cursor_pointer().hover(|s| s.opacity(0.88))
@@ -1280,7 +1338,7 @@ impl Main {
     }
 
     /// Светящаяся сетка за главной карточкой (см. glow.rs). Кадры даёт таймер `tick`.
-    fn glow(&self) -> AnyElement {
+    fn glow(&self) -> Vec<AnyElement> {
         let mode = if self.busy {
             glow::Mode::Waves
         } else if self.healthy() {
@@ -1291,31 +1349,68 @@ impl Main {
             glow::Mode::Idle
         };
         let color = match mode {
-            glow::Mode::Waves => c(WARN).blend(self.accent().opacity(0.55)),
+            // Светлый WARN на белом выходит бурым, поэтому там волны в чистом акценте.
+            glow::Mode::Waves if !light() => c(WARN).blend(self.accent().opacity(0.55)),
             glow::Mode::Error => c(ERROR),
+            // Отключено — сетка без цвета, будто выключена.
+            glow::Mode::Idle => Hsla { s: 0., ..c(MUTED) },
             _ => self.accent(),
         };
         let frame = glow::Frame {
             mode,
             color,
-            star: Hsla {
-                l: (color.l + 0.28).min(0.94),
-                s: color.s * 0.85,
-                ..color
+            // На тёмном фоне гребень светлеет, на белом — насыщается и уходит в золото:
+            // светлые оттенки на белом теряются.
+            hot: if light() {
+                Hsla {
+                    h: color.h + 0.035,
+                    s: (color.s * 1.1).min(1.),
+                    l: (color.l + 0.04).min(0.6),
+                    ..color
+                }
+            } else {
+                Hsla {
+                    h: color.h + 0.04,
+                    l: (color.l + 0.24).min(0.9),
+                    ..color
+                }
             },
-            floor: if light() { 0.035 } else { 0.045 },
+            // В светлой теме неподвижная сетка нейтрально-серая: оранжевая на белом грязнит.
+            base: if light() { c(MUTED) } else { color },
+            floor: if light() { 0.055 } else { 0.045 },
+            lit: if light() { 0.16 } else { 0.45 },
+            haze: if light() { 0.22 } else { 0.24 },
+            peak: if light() { 0.85 } else { 1. },
+            weight: 1.,
             time: self.started.elapsed().as_secs_f32(),
         };
-        let cache = self.glow_cache.clone();
-        canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                glow::paint(window, bounds, &mut cache.borrow_mut(), &frame)
-            },
-        )
-        .absolute()
-        .inset_0()
-        .into_any_element()
+        let fading = self.glow_cache.borrow_mut().advance(&frame);
+        let layer = |frame: glow::Frame, previous: bool| {
+            let state = self.glow_cache.clone();
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let mut state = state.borrow_mut();
+                    let cache = if previous {
+                        &mut state.previous
+                    } else {
+                        &mut state.current
+                    };
+                    glow::paint(window, bounds, cache, &frame)
+                },
+            )
+            .absolute()
+            .inset_0()
+            .into_any_element()
+        };
+        // При смене состояния прежняя сетка гаснет, новая проявляется поверх.
+        match fading {
+            Some((from, k)) => vec![
+                layer(from, true),
+                layer(glow::Frame { weight: k, ..frame }, false),
+            ],
+            None => vec![layer(frame, false)],
+        }
     }
 
     fn ping(&self) -> Option<String> {
@@ -1342,12 +1437,15 @@ impl Main {
             reason.to_owned()
         } else if self.busy {
             "Нажмите, чтобы отменить".into()
+        } else if self.running && self.settings.renat {
+            // Просьба Рената: кнопка остановки — «эльдарнуться».
+            "Нажмите, чтобы эльдарнуться".into()
         } else if self.running && self.checks[2].1 {
             self.checks[3].0.clone()
         } else if self.running {
             self.checks[2].0.clone()
         } else if self.settings.renat {
-            "Нажмите, чтобы моггать".into()
+            "Нажмите, чтобы могать".into()
         } else {
             "Нажмите, чтобы подключиться".into()
         };
@@ -1366,8 +1464,16 @@ impl Main {
                     .mt(px(6.)),
             )
             .child(text(hint, 13., MUTED));
+        // Место под полоски прогресса есть всегда, иначе карточка прыгает по высоте
+        // при каждой смене состояния.
+        let mut progress = div()
+            .w_full()
+            .max_w(px(520.))
+            .h(px(PROGRESS_HEIGHT))
+            .flex()
+            .flex_col()
+            .gap_3();
         if self.busy {
-            let mut progress = div().w_full().max_w(px(520.)).flex().flex_col().gap_3();
             if let Some((done, total, failed)) = self.batch {
                 progress = progress.child(
                     div()
@@ -1416,8 +1522,8 @@ impl Main {
                         )),
                 );
             }
-            hero = hero.child(progress);
         }
+        hero = hero.child(progress);
         let metric = |label: &str, value: String, glyph: &str| {
             div()
                 .flex_1()
@@ -1575,7 +1681,21 @@ impl Main {
                     .bg(c(SURFACE))
                     .border_1()
                     .border_color(c(BORDER))
-                    .children((!self.settings.renat).then(|| self.glow()))
+                    .children(if self.settings.renat {
+                        Vec::new()
+                    } else {
+                        self.glow()
+                    })
+                    // Рамка ещё раз поверх свечения: GPUI обрезает его прямоугольником,
+                    // и у краёв оно залезало на рамку.
+                    .child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .rounded(px(14.))
+                            .border_1()
+                            .border_color(c(BORDER)),
+                    )
                     .child(hero),
             )
             .child(tiles)
@@ -2427,15 +2547,20 @@ impl Main {
         Some(column.into_any_element())
     }
 
-    fn backdrop(&self) -> Option<AnyElement> {
+    /// Фото Ренат мода: своё из data/ или встроенное, своё для подключения и простоя.
+    fn renat_photo(&self) -> Option<PathBuf> {
         if !self.settings.renat {
             return None;
         }
         let candidates: &[&str] = if self.running { &RENAT_ON } else { &RENAT_OFF };
-        let path = candidates
+        candidates
             .iter()
             .map(|name| self.root.join(name))
-            .find(|path| path.is_file())?;
+            .find(|path| path.is_file())
+    }
+
+    fn backdrop(&self) -> Option<AnyElement> {
+        let path = self.renat_photo()?;
         Some(
             div()
                 .absolute()
@@ -2444,7 +2569,7 @@ impl Main {
                     img(path)
                         .size_full()
                         .object_fit(ObjectFit::Cover)
-                        .opacity(0.7),
+                        .opacity(0.9),
                 )
                 .into_any_element(),
         )
@@ -2453,6 +2578,7 @@ impl Main {
 
 impl Render for Main {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::mog::ON.store(self.settings.renat, std::sync::atomic::Ordering::Relaxed);
         let page = match self.page {
             Page::Home => self.home(cx),
             Page::Profiles => self.profiles(cx),
