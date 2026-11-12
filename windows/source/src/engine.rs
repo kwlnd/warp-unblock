@@ -109,11 +109,17 @@ fn probe_delay(
 /// Пишет data/mihomo/warp.yaml для профиля без PowerShell, если аккаунт и reserved уже есть.
 /// false — нужен warp.ps1 (регистрация аккаунта или первое получение reserved).
 fn write_profile(root: &Path, profile: &strategies::Strategy) -> Result<bool> {
+    write_profile_with(root, profile, true)
+}
+
+/// `reserved_required = false` — писать профиль и без reserved (WARP обычно работает и так).
+fn write_profile_with(
+    root: &Path,
+    profile: &strategies::Strategy,
+    reserved_required: bool,
+) -> Result<bool> {
     let warp = root.join("data/warp");
-    let (Ok(conf), Ok(reserved)) = (
-        fs::read_to_string(warp.join("wgcf-profile.conf")),
-        fs::read_to_string(warp.join("reserved.txt")),
-    ) else {
+    let Ok(conf) = fs::read_to_string(warp.join("wgcf-profile.conf")) else {
         return Ok(false);
     };
     if !warp.join("wgcf-account.toml").is_file() {
@@ -140,12 +146,14 @@ fn write_profile(root: &Path, profile: &strategies::Strategy) -> Result<bool> {
     let (Some(ipv4), Some(ipv6)) = (pick(false), pick(true)) else {
         return Ok(false);
     };
-    let reserved = reserved.trim();
-    let bytes: Vec<u8> = serde_json::from_str(reserved).unwrap_or_default();
-    if bytes.len() != 3 {
+    let bytes: Vec<u8> = fs::read_to_string(warp.join("reserved.txt"))
+        .ok()
+        .and_then(|text| serde_json::from_str(text.trim()).ok())
+        .unwrap_or_default();
+    if bytes.len() != 3 && reserved_required {
         return Ok(false);
     }
-    let yaml = [
+    let mut lines = vec![
         "# Сгенерировано WarpUnblock из data/warp/wgcf-profile.conf, пересоздаётся при каждом запуске."
             .to_owned(),
         "proxies:".into(),
@@ -163,14 +171,55 @@ fn write_profile(root: &Path, profile: &strategies::Strategy) -> Result<bool> {
         format!("      jc: {}", profile.jc),
         format!("      jmin: {}", profile.jmin),
         format!("      jmax: {}", profile.jmax),
-        format!("    reserved: [{}, {}, {}]", bytes[0], bytes[1], bytes[2]),
-        String::new(),
-    ]
-    .join("
-");
+    ];
+    if bytes.len() == 3 {
+        lines.push(format!(
+            "    reserved: [{}, {}, {}]",
+            bytes[0], bytes[1], bytes[2]
+        ));
+    }
+    lines.push(String::new());
     fs::create_dir_all(root.join("data/mihomo"))?;
-    fs::write(root.join("data/mihomo/warp.yaml"), yaml)?;
+    fs::write(root.join("data/mihomo/warp.yaml"), lines.join("\n"))?;
     Ok(true)
+}
+
+/// Значение ключа из wgcf-account.toml: `key = 'value'`.
+#[cfg(unix)]
+fn toml_value(text: &str, key: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let (name, value) = line.split_once('=')?;
+        (name.trim() == key).then(|| value.trim().trim_matches(['\'', '"']).to_owned())
+    })
+}
+
+/// 3 байта client_id (reserved) из API Cloudflare: с ними WARP отвечает надёжнее.
+#[cfg(unix)]
+fn fetch_reserved(account: &str) -> Result<String> {
+    use base64::Engine;
+    let device = toml_value(account, "device_id").context("В аккаунте нет device_id")?;
+    let token = toml_value(account, "access_token").context("В аккаунте нет access_token")?;
+    let value: serde_json::Value = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?
+        .get(format!(
+            "https://api.cloudflareclient.com/v0a1922/reg/{device}"
+        ))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("CF-Client-Version", "a-6.3-1922")
+        .header("User-Agent", "okhttp/3.12.1")
+        .send()?
+        .error_for_status()?
+        .json()?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(
+        value["config"]["client_id"]
+            .as_str()
+            .context("Нет client_id")?,
+    )?;
+    if bytes.len() < 3 {
+        bail!("client_id короче трёх байт");
+    }
+    Ok(format!("[{}, {}, {}]", bytes[0], bytes[1], bytes[2]))
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -485,14 +534,25 @@ impl Engine {
         Ok(self.job.as_ref().unwrap())
     }
     fn launch(&mut self, relative: &str, args: &[String], log_name: &str) -> Result<Process> {
+        let cwd = self.root.clone();
+        self.launch_at(relative, args, &cwd, log_name)
+    }
+    fn launch_at(
+        &mut self,
+        relative: &str,
+        args: &[String],
+        cwd: &Path,
+        log_name: &str,
+    ) -> Result<Process> {
         self.job()?;
         Process::spawn(
             self.job.as_ref().unwrap(),
             &self.root.join(relative),
             args,
-            &self.root,
+            cwd,
             &self.root.join(format!("data/logs/{log_name}")),
             &self.root.join("app/config/lists"),
+            needs_root(relative, args),
         )
     }
     fn wait(&self, process: Process, timeout: Duration) -> Result<()> {
@@ -511,6 +571,7 @@ impl Engine {
             thread::sleep(Duration::from_millis(100));
         }
     }
+    #[cfg(windows)]
     fn script(&mut self, script: &str, extra: &[&str], log: &str, timeout: Duration) -> Result<()> {
         self.log(&format!("{script}…"));
         self.job()?;
@@ -535,6 +596,7 @@ impl Engine {
             &self.root,
             &self.root.join(format!("data/logs/{log}")),
             &self.root.join("app/config/lists"),
+            false,
         )?;
         self.wait(process, timeout)
     }
@@ -543,14 +605,15 @@ impl Engine {
         fs::create_dir_all(self.root.join("data/logs"))?;
         fs::create_dir_all(self.root.join("data/mihomo"))?;
         self.job()?;
-        let required = required_files();
+        let required = platform::required_files();
+        #[cfg(windows)]
         if required.iter().any(|p| !self.root.join(p).is_file()) {
             self.log("Не хватает зависимостей. Скачиваю официальные сборки…");
             self.script("setup.ps1", &[], "setup.log", Duration::from_secs(600))?;
         }
         for file in required {
             if !self.root.join(file).is_file() {
-                bail!("Нет файла {file}");
+                bail!("Нет файла {file}. Переустановите программу: ядра идут в комплекте.");
             }
         }
         self.item(0, "Все компоненты на месте", true);
@@ -614,7 +677,7 @@ impl Engine {
         self.stage(1, "Запуск zapret");
         if !args.is_empty() {
             self.log("Запускаю zapret…");
-            let process = self.launch("app/bin/zapret/winws.exe", &args, "zapret.log")?;
+            let process = self.launch(platform::ZAPRET, &args, "zapret.log")?;
             self.pause(Duration::from_secs(1))?;
             if let Some(code) = process.exit_code()? {
                 bail!("winws не запустился (код {code}), см. zapret.log");
@@ -662,8 +725,7 @@ impl Engine {
             let bypass = match &method {
                 Some(args) => {
                     let args = crate::registration::winws_args(args, &self.root);
-                    let process =
-                        self.launch("app/bin/zapret/winws.exe", &args, "registration.log")?;
+                    let process = self.launch(platform::ZAPRET, &args, "registration.log")?;
                     self.pause(Duration::from_millis(500))?;
                     Some(process)
                 }
@@ -685,6 +747,7 @@ impl Engine {
         )
     }
 
+    #[cfg(windows)]
     fn profile_script(&mut self, profile: &strategies::Strategy, timeout: Duration) -> Result<()> {
         let parameters = [
             "-Action".to_string(),
@@ -706,6 +769,42 @@ impl Engine {
             "profile.log",
             timeout,
         )
+    }
+
+    /// Linux: wgcf и запрос reserved делаем сами, вместо PowerShell-скрипта.
+    #[cfg(unix)]
+    fn profile_script(&mut self, profile: &strategies::Strategy, timeout: Duration) -> Result<()> {
+        let warp = self.root.join("data/warp");
+        fs::create_dir_all(&warp)?;
+        let steps: [(&str, &[&str]); 2] = [
+            ("wgcf-account.toml", &["register", "--accept-tos"]),
+            ("wgcf-profile.conf", &["generate"]),
+        ];
+        for (file, args) in steps {
+            if warp.join(file).is_file() {
+                continue;
+            }
+            self.log(&format!("wgcf {}…", args[0]));
+            let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+            let process = self.launch_at(platform::WGCF, &args, &warp, "profile.log")?;
+            self.wait(process, timeout)?;
+            if !warp.join(file).is_file() {
+                bail!("wgcf не создал {file}; см. profile.log");
+            }
+        }
+        if !warp.join("reserved.txt").is_file() {
+            let account = fs::read_to_string(warp.join("wgcf-account.toml")).unwrap_or_default();
+            match fetch_reserved(&account) {
+                Ok(reserved) => fs::write(warp.join("reserved.txt"), reserved)?,
+                Err(error) => self.log(&format!(
+                    "reserved получить не удалось, работаю без него: {error:#}"
+                )),
+            }
+        }
+        if !write_profile_with(&self.root, profile, false)? {
+            bail!("Не удалось собрать профиль WARP из wgcf-profile.conf");
+        }
+        Ok(())
     }
 
     fn finish_start(
@@ -732,8 +831,7 @@ impl Engine {
             let mut validation = vec!["-t".to_string()];
             validation.extend(args.clone());
             self.log("Проверяю конфигурацию mihomo…");
-            let process =
-                self.launch("app/bin/mihomo/mihomo.exe", &validation, "validation.log")?;
+            let process = self.launch(platform::MIHOMO, &validation, "validation.log")?;
             self.wait(process, Duration::from_secs(5))?;
         }
         self.log(if test {
@@ -742,7 +840,7 @@ impl Engine {
             "Поднимаю TUN. Обычный трафик — DIRECT."
         });
         self.stage(4, "Запуск mihomo");
-        let process = self.launch("app/bin/mihomo/mihomo.exe", &args, "mihomo.log")?;
+        let process = self.launch(platform::MIHOMO, &args, "mihomo.log")?;
         self.children.push(process);
         self.running = !test;
         self.state(true, "Проверяю тоннель WARP…");
@@ -888,7 +986,9 @@ impl Engine {
             for (index, (label, ok)) in [
                 (
                     "Компоненты на месте",
-                    required_files().iter().all(|p| self.root.join(p).is_file()),
+                    platform::required_files()
+                        .iter()
+                        .all(|p| self.root.join(p).is_file()),
                 ),
                 (
                     "Профиль WARP сохранён",
@@ -1002,11 +1102,7 @@ impl Engine {
         self.opera.take();
         self.item(3, "Подключаю Opera EU через WARP…", false);
         self.log("Запускаю Opera EU; API и HTTPS-туннель Opera идут через WARP.");
-        let process = self.launch(
-            "app/bin/opera/opera-proxy.exe",
-            &opera::launch_args(),
-            "opera-proxy.log",
-        )?;
+        let process = self.launch(platform::OPERA, &opera::launch_args(), "opera-proxy.log")?;
         self.opera = Some(process);
         match self.opera_country(Duration::from_secs(60)) {
             Ok(country) => {
@@ -1053,17 +1149,13 @@ impl Engine {
     }
 }
 
-pub fn required_files() -> [&'static str; 8] {
-    [
-        "app/bin/mihomo/mihomo.exe",
-        "app/bin/wgcf/wgcf.exe",
-        "app/bin/zapret/winws.exe",
-        "app/bin/zapret/WinDivert.dll",
-        "app/bin/zapret/WinDivert64.sys",
-        "app/bin/zapret/cygwin1.dll",
-        "app/bin/zapret/tls_clienthello_www_google_com.bin",
-        "app/bin/opera/opera-proxy.exe",
-    ]
+/// Правам root нужны mihomo с TUN и nfqws; проверка конфигурации и пробный запуск без TUN — нет.
+/// На Windows весь процесс уже запущен с правами администратора, там флаг не используется.
+fn needs_root(relative: &str, args: &[String]) -> bool {
+    relative == platform::ZAPRET
+        || (relative == platform::MIHOMO
+            && args.first().is_none_or(|arg| arg != "-t")
+            && !args.iter().any(|arg| arg.ends_with("warp-test.yaml")))
 }
 
 fn strategy_args(settings: &Settings, root: &Path) -> Result<Vec<String>> {
@@ -1111,7 +1203,7 @@ fn parse_args(input: &str) -> Result<Vec<String>> {
 pub fn self_test(root: &Path) -> Result<()> {
     fs::create_dir_all(root.join("data/logs"))?;
     let result = (|| -> Result<()> {
-        for file in required_files() {
+        for file in platform::required_files() {
             if !root.join(file).is_file() {
                 bail!("Missing {file}");
             }
@@ -1140,11 +1232,12 @@ pub fn self_test(root: &Path) -> Result<()> {
             args.insert(0, "--dry-run".into());
             let process = Process::spawn(
                 &job,
-                &root.join("app/bin/zapret/winws.exe"),
+                &root.join(platform::ZAPRET),
                 &args,
                 root,
                 &root.join("data/logs/self-test.log"),
                 &root.join("app/config/lists"),
+                false,
             )?;
             let deadline = Instant::now() + Duration::from_secs(5);
             while process.exit_code()?.is_none() {
@@ -1159,7 +1252,7 @@ pub fn self_test(root: &Path) -> Result<()> {
         }
         let process = Process::spawn(
             &job,
-            &root.join("app/bin/mihomo/mihomo.exe"),
+            &root.join(platform::MIHOMO),
             &[
                 "-t".into(),
                 "-d".into(),
@@ -1170,6 +1263,7 @@ pub fn self_test(root: &Path) -> Result<()> {
             root,
             &root.join("data/logs/self-test.log"),
             &root.join("app/config/lists"),
+            false,
         )?;
         let deadline = Instant::now() + Duration::from_secs(30);
         while process.exit_code()?.is_none() {
@@ -1181,17 +1275,15 @@ pub fn self_test(root: &Path) -> Result<()> {
         if process.exit_code()? != Some(0) {
             bail!("mihomo config validation failed");
         }
+        let (sleeper_exe, sleeper_args) = platform::sleeper();
         let sleeper = Process::spawn(
             &job,
-            &platform::powershell(),
-            &[
-                "-NoProfile".into(),
-                "-Command".into(),
-                "Start-Sleep -Seconds 60".into(),
-            ],
+            &sleeper_exe,
+            &sleeper_args,
             root,
             &root.join("data/logs/self-test.log"),
             &root.join("app/config/lists"),
+            false,
         )?;
         drop(job);
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -1206,7 +1298,7 @@ pub fn self_test(root: &Path) -> Result<()> {
     fs::write(
         root.join("data/logs/self-test-result.txt"),
         match &result {
-            Ok(()) => "PASS: components, all WARP strategy arguments (winws dry-run), config validation, process isolation and job cleanup\n"
+            Ok(()) => "PASS: components, all WARP strategy arguments (zapret dry-run), config validation, process isolation and job cleanup\n"
                 .to_string(),
             Err(error) => format!("FAIL: {error:#}\n"),
         },
@@ -1321,7 +1413,7 @@ mod tests {
         };
         assert!(
             !write_profile(&root, &profile).unwrap(),
-            "без аккаунта нужен warp.ps1"
+            "без аккаунта нужна регистрация"
         );
         let key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         fs::write(root.join("data/warp/wgcf-account.toml"), "device_id = 'x'").unwrap();
@@ -1332,7 +1424,7 @@ mod tests {
         .unwrap();
         assert!(
             !write_profile(&root, &profile).unwrap(),
-            "без reserved нужен warp.ps1"
+            "без reserved нужно его получить"
         );
         fs::write(root.join("data/warp/reserved.txt"), "[1, 2, 3]\n").unwrap();
         assert!(write_profile(&root, &profile).unwrap());

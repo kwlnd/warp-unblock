@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<!-- Права для помощника WARP Unblock: создание TUN-интерфейса (mihomo) и очередь пакетов (nfqws).
+     Окно программы работает от обычного пользователя; пароль спрашивается один раз за сеанс. -->
+<policyconfig>
+  <vendor>WARP Unblock</vendor>
+  <vendor_url>https://github.com/kwlnd/warp-unblock</vendor_url>
+  <action id="org.warpunblock.helper">
+    <description>Запустить помощника WARP Unblock</description>
+    <message>WARP Unblock нужны права администратора, чтобы создать сетевой интерфейс и правила обхода блокировок</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/opt/warp-unblock/WarpUnblock</annotate>
+  </action>
+</policyconfig>
