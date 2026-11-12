@@ -1,6 +1,6 @@
 name: Release
 
-# Один тег vX.Y.Z — один релиз: Windows ZIP, два Android APK и общий SHA256SUMS.txt.
+# Один тег vX.Y.Z — один релиз: Windows ZIP, Linux (tar.gz, deb, rpm для x86_64 и aarch64), два Android APK и общий SHA256SUMS.txt.
 on:
   push:
     tags: ["v*"]
@@ -35,6 +35,12 @@ jobs:
     with:
       version: ${{ needs.version.outputs.tag }}
 
+  linux:
+    needs: version
+    uses: ./.github/workflows/linux.yml
+    with:
+      version: ${{ needs.version.outputs.tag }}
+
   android:
     needs: version
     uses: ./.github/workflows/android.yml
@@ -42,7 +48,7 @@ jobs:
       version: ${{ needs.version.outputs.tag }}
 
   publish:
-    needs: [version, windows, android]
+    needs: [version, windows, linux, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -53,7 +59,7 @@ jobs:
       - name: Контрольные суммы
         run: |
           cd dist
-          sha256sum *.zip *.apk > SHA256SUMS.txt
+          sha256sum *.zip *.tar.gz *.deb *.rpm *.apk > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       # Подпись Ed25519 списка сумм: программы ставят обновление, только если подпись сходится с
@@ -80,6 +86,8 @@ jobs:
         run: |
           cat > notes.md <<'EOF'
           **Windows x64:** распакуйте `WarpUnblock-*-win-x64.zip` в любую папку и запустите `WarpUnblock/WarpUnblock.exe` (нужны права администратора). Инструкция — `README.md` рядом с папкой.
+
+          **Linux x86_64 и aarch64:** `WarpUnblock-*-linux-<arch>.tar.gz` — распаковать и запустить `WarpUnblock/WarpUnblock` (для ярлыка в меню — `./install.sh`); `.deb` — Debian, Ubuntu, Mint; `.rpm` — Fedora, openSUSE. Права для TUN запрашивает polkit. Подробности — `README.md` в архиве.
 
           **Android 7.0+:** `arm64-v8a` — почти все телефоны, `universal` — ТВ-приставки, 32-битные системы и если не знаете, что выбрать. Ставится поверх прошлой версии.
 

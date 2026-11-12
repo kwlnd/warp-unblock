@@ -1,7 +1,9 @@
-//! Обновление из GitHub Releases: поиск свежего `v*`, загрузка ZIP, проверка подписи Ed25519
-//! списка сумм `SHA256SUMS.txt` и SHA-256 архива, замена файлов рядом с exe и перезапуск.
+//! Обновление из GitHub Releases: поиск свежего `v*`, загрузка архива (ZIP на Windows, tar.gz на
+//! Linux), проверка подписи Ed25519
+//! списка сумм `SHA256SUMS.txt` и SHA-256 архива, замена файлов рядом с программой и перезапуск.
 //! Данные (`data/`) и свои списки доменов не трогаются. Если GitHub напрямую не отвечает, а
 //! подключение активно, запросы повторяются через WARP (вход ядра `opera-underlay`, 17892).
+use crate::platform;
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::{
@@ -23,7 +25,7 @@ const MAX_DOWNLOAD: u64 = 300 * 1024 * 1024;
 const UPDATE_KEY: &str = "gwjccy9ryFjmeGN6zMYamhwpoOWzMvNI+JYL/xF85yc=";
 /// Вход ядра mihomo, весь трафик которого идёт через WARP (`opera-underlay` в config.yaml).
 const WARP_INPUT: &str = "127.0.0.1:17892";
-const EXE: &str = "WarpUnblock.exe";
+const EXE: &str = platform::EXE_NAME;
 
 pub const VERSION: &str = match option_env!("WARP_VERSION") {
     Some(v) => v,
@@ -122,7 +124,7 @@ fn asset(item: &serde_json::Value) -> Option<Asset> {
     })
 }
 
-/// Самый свежий стабильный Windows-релиз из списка GitHub API (без черновиков и пререлизов).
+/// Самый свежий стабильный релиз с архивом для этой платформы из списка GitHub API (без черновиков и пререлизов).
 fn pick(items: &[serde_json::Value]) -> Option<([u64; 3], Release)> {
     items
         .iter()
@@ -138,7 +140,7 @@ fn pick(items: &[serde_json::Value]) -> Option<([u64; 3], Release)> {
                 .unwrap_or_default();
             let zip = assets
                 .iter()
-                .find(|a| a.name.ends_with("-win-x64.zip"))?
+                .find(|a| a.name.ends_with(platform::ARCHIVE_SUFFIX))?
                 .clone();
             let sums = assets.iter().find(|a| a.name == "SHA256SUMS.txt").cloned();
             let sig = assets
@@ -223,6 +225,7 @@ fn sha256(path: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+#[cfg(windows)]
 /// Распаковывает архив релиза в `staging`, срезая верхнюю папку `WarpUnblock/`.
 fn extract(zip: &Path, staging: &Path) -> Result<Vec<PathBuf>> {
     let mut archive = zip::ZipArchive::new(fs::File::open(zip)?)?;
@@ -243,6 +246,43 @@ fn extract(zip: &Path, staging: &Path) -> Result<Vec<PathBuf>> {
         fs::create_dir_all(target.parent().unwrap())?;
         let mut out = fs::File::create(&target)?;
         std::io::copy(&mut entry, &mut out)?;
+        files.push(relative);
+    }
+    if !files.iter().any(|f| f == Path::new(EXE)) {
+        bail!("В архиве нет {EXE}");
+    }
+    Ok(files)
+}
+
+/// Распаковывает tar.gz релиза в `staging`, срезая верхнюю папку `WarpUnblock/`; права на
+/// запуск (ядра, nfqws, сама программа) берутся из архива.
+#[cfg(unix)]
+fn extract(archive: &Path, staging: &Path) -> Result<Vec<PathBuf>> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(archive)?));
+    let mut files = Vec::new();
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let path = entry.path()?.into_owned();
+        if path
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            bail!("Небезопасный путь в архиве");
+        }
+        let relative: PathBuf = path.components().skip(1).collect();
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+        let target = staging.join(&relative);
+        fs::create_dir_all(target.parent().unwrap())?;
+        let mode = entry.header().mode().unwrap_or(0o644);
+        let mut out = fs::File::create(&target)?;
+        std::io::copy(&mut entry, &mut out)?;
+        fs::set_permissions(&target, fs::Permissions::from_mode(mode & 0o755 | 0o600))?;
         files.push(relative);
     }
     if !files.iter().any(|f| f == Path::new(EXE)) {
@@ -322,6 +362,9 @@ pub enum Step {
 
 /// Скачивает, проверяет и ставит релиз. Соединение должно быть остановлено заранее.
 pub fn install(root: &Path, release: &Release, progress: &dyn Fn(Step)) -> Result<usize> {
+    if !platform::can_self_update() {
+        bail!("Эта установка обновляется через пакетный менеджер или новым пакетом со страницы релизов");
+    }
     let (Some(sums), Some(sig)) = (&release.sums, &release.sig) else {
         bail!("У релиза нет подписанных контрольных сумм — установка отменена");
     };
@@ -416,37 +459,82 @@ mod tests {
     }
 
     #[test]
-    fn picks_newest_windows_release_with_zip() {
+    fn picks_newest_release_with_archive_for_this_platform() {
+        let name = |v: &str| format!("WarpUnblock-{v}{}", platform::ARCHIVE_SUFFIX);
+        let sha = |v: &str| format!("{}.sha256", name(v));
         let items = vec![
             release(
                 "v0.5.1",
                 false,
                 false,
-                &[
-                    "WarpUnblock-v0.5.1-win-x64.zip",
-                    "WarpUnblock-v0.5.1-win-x64.zip.sha256",
-                ],
+                &[name("v0.5.1").as_str(), sha("v0.5.1").as_str()],
             ),
-            release("v0.10.0", false, true, &["WarpUnblock-v0.10.0-win-x64.zip"]),
+            release("v0.10.0", false, true, &[name("v0.10.0").as_str()]),
             release("android-v9.0.0", false, false, &["a.apk"]),
             release(
                 "v0.6.0",
                 false,
                 false,
                 &[
-                    "WarpUnblock-v0.6.0-win-x64.zip",
-                    "WarpUnblock-v0.6.0-win-x64.zip.sha256",
+                    name("v0.6.0").as_str(),
+                    sha("v0.6.0").as_str(),
                     "SHA256SUMS.txt",
                     "SHA256SUMS.txt.sig",
                 ],
             ),
             release("v0.7.0", false, false, &["other.txt"]),
+            // Архив только для другой платформы не годится.
+            release("v0.8.0", false, false, &["WarpUnblock-v0.8.0-other.tar.xz"]),
         ];
         let (v, r) = pick(&items).unwrap();
         assert_eq!(v, [0, 6, 0]);
-        assert_eq!(r.zip.name, "WarpUnblock-v0.6.0-win-x64.zip");
+        assert_eq!(r.zip.name, name("v0.6.0"));
         assert_eq!(r.sums.unwrap().name, "SHA256SUMS.txt");
         assert_eq!(r.sig.unwrap().name, "SHA256SUMS.txt.sig");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tar_extract_strips_top_folder_and_keeps_exec_bit() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("wu-tar-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("staging")).unwrap();
+        let archive = base.join("a.tar.gz");
+        {
+            let encoder = flate2::write::GzEncoder::new(
+                fs::File::create(&archive).unwrap(),
+                flate2::Compression::fast(),
+            );
+            let mut builder = tar::Builder::new(encoder);
+            for (path, mode, body) in [
+                (format!("WarpUnblock/{EXE}"), 0o755, "exe"),
+                ("WarpUnblock/app/bin/core".to_owned(), 0o755, "core"),
+                ("WarpUnblock/app/config/a.txt".to_owned(), 0o644, "cfg"),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(body.len() as u64);
+                header.set_mode(mode);
+                header.set_cksum();
+                builder
+                    .append_data(&mut header, path, body.as_bytes())
+                    .unwrap();
+            }
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+        let files = extract(&archive, &base.join("staging")).unwrap();
+        assert!(files.contains(&PathBuf::from(EXE)));
+        assert!(files.contains(&PathBuf::from("app/bin/core")));
+        let mode = |p: &str| {
+            fs::metadata(base.join("staging").join(p))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(mode("app/bin/core"), 0o755);
+        assert_eq!(mode("app/config/a.txt"), 0o644);
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

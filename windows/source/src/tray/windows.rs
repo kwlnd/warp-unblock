@@ -1,28 +1,15 @@
 //! Иконка в трее: левый клик — открыть окно, правый — меню. Обработчики работают на потоке
 //! событий Windows и не зависят от отрисовки окна, поэтому живут и при скрытом окне.
+use super::{Look, QUIT};
 use crate::{
     engine::{Command, Handle, Settings},
     platform,
 };
-use std::{
-    path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::{path::PathBuf, sync::atomic::Ordering};
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
 };
-
-/// Выбран пункт «Выход» в меню трея.
-pub static QUIT: AtomicBool = AtomicBool::new(false);
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Look {
-    Off,
-    Busy,
-    Ok,
-    Error,
-}
 
 pub struct Tray {
     icon: TrayIcon,
@@ -38,7 +25,7 @@ fn render(look: Look) -> Icon {
         Look::Ok => (246, 130, 31),
         Look::Error => (242, 102, 109),
     };
-    let mask = image::load_from_memory(include_bytes!("../assets/icons/tray-mask.png"))
+    let mask = image::load_from_memory(include_bytes!("../../assets/icons/tray-mask.png"))
         .expect("tray mask")
         .to_rgba8();
     let (width, height) = mask.dimensions();

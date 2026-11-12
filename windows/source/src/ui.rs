@@ -33,7 +33,7 @@ const WARN: u32 = 0xf0b429;
 const ERROR: u32 = 0xf2666d;
 /// Высота блока с полосками прогресса подбора профиля и этапа подключения.
 const PROGRESS_HEIGHT: f32 = 84.;
-/// Manrope вшит в программу, поэтому выглядит одинаково на любой Windows.
+/// Manrope вшит в программу, поэтому выглядит одинаково везде.
 const FONT: &str = "Manrope";
 const FONT_FILES: [&[u8]; 4] = [
     include_bytes!("../assets/fonts/Manrope-Regular.ttf"),
@@ -179,6 +179,9 @@ pub fn run(root: PathBuf, tray_start: bool, preview: bool) {
                     ..Default::default()
                 }),
                 window_min_size: Some(size(px(720.), px(540.))),
+                // Linux: рамку и кнопки окна рисуем сами (на GNOME серверных заголовков нет).
+                app_id: cfg!(unix).then(|| "warp-unblock".to_owned()),
+                window_decorations: cfg!(unix).then_some(WindowDecorations::Client),
                 icon: image::load_from_memory(include_bytes!("../assets/icons/app.png"))
                     .ok()
                     .map(|icon| std::sync::Arc::new(icon.to_rgba8())),
@@ -522,7 +525,7 @@ impl Main {
         }
     }
 
-    /// Тема: «system» следует за Windows, «light»/«dark» — выбор пользователя.
+    /// Тема: «system» следует за системой, «light»/«dark» — выбор пользователя.
     fn sync_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let want = match self.settings.theme.as_str() {
             "light" => true,
@@ -546,6 +549,14 @@ impl Main {
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_theme(window, cx);
+        // Linux: трей и второй запуск просят показать/спрятать окно через platform.
+        if let Some(show) = platform::take_window_request() {
+            if show {
+                window.activate_window();
+            } else {
+                window.minimize_window();
+            }
+        }
         let mut changed = false;
         while let Ok(event) = self.worker.rx.try_recv() {
             changed = true;
@@ -1048,7 +1059,7 @@ fn section_title(title: &str, hint: &str) -> Div {
 impl Main {
     /// Своя плашка окна: логотип, статус по центру, кнопки окна. Перетаскивание,
     /// двойной клик и Snap обрабатывает Windows по зонам `WindowControlArea`.
-    fn title_bar(&self, window: &Window) -> impl IntoElement {
+    fn title_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let color = self.state_color();
         let status = if self.busy {
             self.status.clone()
@@ -1114,6 +1125,7 @@ impl Main {
                     .gap_2()
                     .pl(px(16.))
                     .window_control_area(WindowControlArea::Drag)
+                    .map(linux_drag)
                     .child(match self.renat_photo() {
                         Some(path) => img(path)
                             .size(px(20.))
@@ -1138,6 +1150,7 @@ impl Main {
                     .items_center()
                     .justify_center()
                     .window_control_area(WindowControlArea::Drag)
+                    .map(linux_drag)
                     .child(
                         div()
                             .flex()
@@ -1165,18 +1178,11 @@ impl Main {
                             ),
                     ),
             )
-            .child(control(
-                "min",
-                "window-minimize",
-                WindowControlArea::Min,
-                false,
-            ))
-            .child(control("max", maximize, WindowControlArea::Max, false))
-            .child(control(
-                "close",
-                "window-close",
-                WindowControlArea::Close,
-                true,
+            .child(linux_buttons(
+                control("min", "window-minimize", WindowControlArea::Min, false),
+                control("max", maximize, WindowControlArea::Max, false),
+                control("close", "window-close", WindowControlArea::Close, true),
+                cx,
             ))
     }
 
@@ -2064,7 +2070,14 @@ impl Main {
             .rounded(px(10.))
             .bg(c(SURFACE_HOVER));
         for (key, label) in [
-            ("system", "Как в Windows"),
+            (
+                "system",
+                if cfg!(windows) {
+                    "Как в Windows"
+                } else {
+                    "Как в системе"
+                },
+            ),
             ("light", "Светлая"),
             ("dark", "Тёмная"),
         ] {
@@ -2110,7 +2123,11 @@ impl Main {
                     .gap_1()
                     .child(text("Тема", 15., TEXT))
                     .child(text(
-                        "«Как в Windows» переключается вместе с системой",
+                        if cfg!(windows) {
+                            "«Как в Windows» переключается вместе с системой"
+                        } else {
+                            "«Как в системе» переключается вместе с системой"
+                        },
                         13.,
                         MUTED,
                     )),
@@ -2127,7 +2144,7 @@ impl Main {
             .child(self.theme_picker(cx))
             .child(self.switch_row(
                 "autostart",
-                "Запускать вместе с Windows",
+                if cfg!(windows) { "Запускать вместе с Windows" } else { "Запускать при входе в систему" },
                 "Тихо, в трее, с автоподключением",
                 self.settings.autostart,
                 cx,
@@ -2224,7 +2241,9 @@ impl Main {
                     .child(
                         button("releases", "Релизы на GitHub", false, true, accent).on_click(
                             |_, _, _| {
-                                let _ = open_url("https://github.com/kwlnd/warp-unblock/releases");
+                                let _ = platform::open_url(
+                                    "https://github.com/kwlnd/warp-unblock/releases",
+                                );
                             },
                         ),
                     ),
@@ -2358,7 +2377,7 @@ impl Main {
                             .on_click(move |_, _, _| match readme.as_ref().filter(|p| p.is_file()) {
                                 Some(path) => platform::open(path),
                                 None => {
-                                    let _ = open_url(
+                                    let _ = platform::open_url(
                                         "https://github.com/kwlnd/warp-unblock/blob/main/windows/README.md",
                                     );
                                 }
@@ -2487,7 +2506,7 @@ impl Main {
                             ))
                             .child(button("page", "Что нового", false, true, accent).on_click(
                                 move |_, _, _| {
-                                    let _ = open_url(&page);
+                                    let _ = platform::open_url(&page);
                                 },
                             ))
                             .child(button("later", "Позже", false, true, accent).on_click(
@@ -2638,6 +2657,134 @@ impl Main {
     }
 }
 
+/// Linux: перетаскивание плашки и двойной клик (на Windows это зоны `WindowControlArea`).
+fn linux_drag(element: Stateful<Div>) -> Stateful<Div> {
+    #[cfg(unix)]
+    let element = element.on_mouse_down(MouseButton::Left, |event, window, _| {
+        if event.click_count == 2 {
+            window.zoom_window();
+        } else {
+            window.start_window_move();
+        }
+    });
+    element
+}
+
+/// Кнопки окна: на Windows их обрабатывает система по зонам, на Linux — обычные клики.
+fn linux_buttons(
+    minimize: Stateful<Div>,
+    maximize: Stateful<Div>,
+    close: Stateful<Div>,
+    cx: &mut Context<Main>,
+) -> impl IntoElement {
+    #[cfg(unix)]
+    let (minimize, maximize, close) = (
+        minimize
+            .cursor_pointer()
+            .on_click(cx.listener(|_, _, window, _| window.minimize_window())),
+        maximize
+            .cursor_pointer()
+            .on_click(cx.listener(|_, _, window, _| window.zoom_window())),
+        close
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, window, cx| {
+                if this.should_close(window, cx) {
+                    window.remove_window();
+                }
+            })),
+    );
+    #[cfg(not(unix))]
+    let _ = cx;
+    div()
+        .flex()
+        .flex_none()
+        .child(minimize)
+        .child(maximize)
+        .child(close)
+}
+
+/// Linux: невидимые края окна для изменения размера (рамки без серверных заголовков нет).
+fn resize_handles() -> Vec<AnyElement> {
+    #[cfg(unix)]
+    {
+        const EDGE: f32 = 5.;
+        const CORNER: f32 = 12.;
+        let handle = |id: &'static str, edge: ResizeEdge, cursor: CursorStyle| {
+            div()
+                .id(id)
+                .absolute()
+                .cursor(cursor)
+                .on_mouse_down(MouseButton::Left, move |_, window, _| {
+                    window.start_window_resize(edge)
+                })
+        };
+        vec![
+            handle("rz-top", ResizeEdge::Top, CursorStyle::ResizeUpDown)
+                .top_0()
+                .left(px(CORNER))
+                .right(px(CORNER))
+                .h(px(EDGE))
+                .into_any_element(),
+            handle("rz-bottom", ResizeEdge::Bottom, CursorStyle::ResizeUpDown)
+                .bottom_0()
+                .left(px(CORNER))
+                .right(px(CORNER))
+                .h(px(EDGE))
+                .into_any_element(),
+            handle("rz-left", ResizeEdge::Left, CursorStyle::ResizeLeftRight)
+                .left_0()
+                .top(px(CORNER))
+                .bottom(px(CORNER))
+                .w(px(EDGE))
+                .into_any_element(),
+            handle("rz-right", ResizeEdge::Right, CursorStyle::ResizeLeftRight)
+                .right_0()
+                .top(px(CORNER))
+                .bottom(px(CORNER))
+                .w(px(EDGE))
+                .into_any_element(),
+            handle(
+                "rz-tl",
+                ResizeEdge::TopLeft,
+                CursorStyle::ResizeUpLeftDownRight,
+            )
+            .top_0()
+            .left_0()
+            .size(px(CORNER))
+            .into_any_element(),
+            handle(
+                "rz-tr",
+                ResizeEdge::TopRight,
+                CursorStyle::ResizeUpRightDownLeft,
+            )
+            .top_0()
+            .right_0()
+            .size(px(CORNER))
+            .into_any_element(),
+            handle(
+                "rz-bl",
+                ResizeEdge::BottomLeft,
+                CursorStyle::ResizeUpRightDownLeft,
+            )
+            .bottom_0()
+            .left_0()
+            .size(px(CORNER))
+            .into_any_element(),
+            handle(
+                "rz-br",
+                ResizeEdge::BottomRight,
+                CursorStyle::ResizeUpLeftDownRight,
+            )
+            .bottom_0()
+            .right_0()
+            .size(px(CORNER))
+            .into_any_element(),
+        ]
+    }
+    #[cfg(not(unix))]
+    Vec::new()
+}
+
 impl Render for Main {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::mog::ON.store(self.settings.renat, std::sync::atomic::Ordering::Relaxed);
@@ -2676,7 +2823,8 @@ impl Render for Main {
             .text_color(c(TEXT))
             .bg(c(BACKGROUND))
             .children(self.backdrop())
-            .child(self.title_bar(window))
+            .child(self.title_bar(window, cx))
+            .children(resize_handles())
             .child(
                 div()
                     .flex()
@@ -2705,15 +2853,6 @@ fn plain_notes(markdown: &str) -> String {
             "
 ",
         )
-}
-
-fn open_url(url: &str) -> std::io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    std::process::Command::new("explorer.exe")
-        .arg(url)
-        .creation_flags(0x0800_0000)
-        .spawn()
-        .map(|_| ())
 }
 
 fn load_results(root: &Path) -> HashMap<usize, Option<u64>> {

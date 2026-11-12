@@ -29,6 +29,65 @@ use windows_sys::Win32::{
     },
 };
 
+pub const MIHOMO: &str = "app/bin/mihomo/mihomo.exe";
+pub const WGCF: &str = "app/bin/wgcf/wgcf.exe";
+pub const ZAPRET: &str = "app/bin/zapret/winws.exe";
+pub const OPERA: &str = "app/bin/opera/opera-proxy.exe";
+/// Имя исполняемого файла в архиве обновления.
+pub const EXE_NAME: &str = "WarpUnblock.exe";
+/// Окончание имени архива релиза для этой платформы.
+pub const ARCHIVE_SUFFIX: &str = "-win-x64.zip";
+
+/// Файлы, без которых подключение невозможно.
+pub fn required_files() -> Vec<&'static str> {
+    vec![
+        MIHOMO,
+        WGCF,
+        ZAPRET,
+        "app/bin/zapret/WinDivert.dll",
+        "app/bin/zapret/WinDivert64.sys",
+        "app/bin/zapret/cygwin1.dll",
+        "app/bin/zapret/tls_clienthello_www_google_com.bin",
+        OPERA,
+    ]
+}
+
+/// Корень программы: папка с exe (рядом `app/` и `data/`).
+pub fn root() -> Result<std::path::PathBuf> {
+    Ok(std::env::current_exe()?.parent().unwrap().to_path_buf())
+}
+
+/// Самообновление возможно, если папка с программой принадлежит пользователю.
+pub fn can_self_update() -> bool {
+    true
+}
+
+/// Запрос показать/скрыть окно из другого потока; на Windows окно ищется по заголовку.
+pub fn take_window_request() -> Option<bool> {
+    None
+}
+
+/// Команда, которая живёт долго: проверка завершения дочерних процессов вместе с заданием.
+pub fn sleeper() -> (std::path::PathBuf, Vec<String>) {
+    (
+        powershell(),
+        vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            "Start-Sleep -Seconds 60".into(),
+        ],
+    )
+}
+
+pub fn open_url(url: &str) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("explorer.exe")
+        .arg(url)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+}
+
 fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
     value.as_ref().encode_wide().chain(Some(0)).collect()
 }
@@ -257,6 +316,7 @@ impl Process {
         cwd: &Path,
         log: &Path,
         safe_paths: &Path,
+        _privileged: bool,
     ) -> Result<Self> {
         let output = OpenOptions::new()
             .create(true)

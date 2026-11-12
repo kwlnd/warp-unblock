@@ -1,0 +1,82 @@
+name: Linux
+
+on:
+  # Проверка на push/PR; релиз собирает release.yml, вызывая этот файл с версией.
+  push:
+    branches: [main]
+    paths: ["windows/source/**", "windows/app/**", "linux/**", ".github/workflows/linux.yml"]
+  pull_request:
+    paths: ["windows/source/**", "windows/app/**", "linux/**", ".github/workflows/linux.yml"]
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu 22.04 (glibc 2.35): собранное запускается и на более новых дистрибутивах.
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Версия
+        id: ver
+        run: echo "tag=${{ inputs.version || 'v0.0.0' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Системные библиотеки
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config clang cmake libfontconfig-dev libfreetype-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xkb-dev \
+            libx11-xcb-dev libxrandr-dev libxi-dev libxcursor-dev libasound2-dev \
+            nftables
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            windows/source/target
+          key: cargo-linux-${{ matrix.arch }}-${{ hashFiles('windows/source/Cargo.lock') }}
+          restore-keys: cargo-linux-${{ matrix.arch }}-
+
+      - name: Тесты и сборка
+        working-directory: windows/source
+        env:
+          WARP_VERSION: ${{ steps.ver.outputs.tag }}
+        run: |
+          cargo test --locked
+          cargo build --release --locked
+          ./target/release/warp-unblock --version
+
+      - name: Собрать пакеты
+        if: inputs.version != ''
+        run: linux/tools/package.sh "${{ matrix.arch }}" "${{ steps.ver.outputs.tag }}"
+
+      - uses: actions/upload-artifact@v4
+        if: inputs.version != ''
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.deb
+            dist/*.rpm
+          if-no-files-found: error
