@@ -17,13 +17,22 @@
 - Профиль WARP: нет аккаунта или `wgcf-profile.conf` → `ensure_profile` получает их у API Cloudflare напрямую, затем способами обхода из `registration.json`; подбор делает это один раз до перебора.
 - Preview: `--preview`, `WARP_PREVIEW_STATE=busy|on|error|cycle`, `WARP_PREVIEW_UPDATE=1`.
 
-## Linux (в работе, не собиралось)
+## В main, не в релизе
 
-Код написан 12.11, **ни разу не компилировался под Linux** (на машине нет Linux-тулчейна, Docker Desktop не стартовал: ошибка сокета `dockerInference`). Windows-часть после рефакторинга: `cargo test --locked` проходит (25 тестов). Устройство и решения — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md), раздел «Linux».
+- PR #20 (смержен 18.11): ручной выбор адреса WARP на «Профилях» (Windows + Android, при подключении заблокирован); проверка сервисов на главной Android (`ServiceCheck.kt`, через `/proxies/WARP/delay` основного ядра); Meta (`instagram.com`) в проверке на обеих платформах. CI зелёный, вживую не запускалось.
+- Проверить руками: ширина плиток адресов (196 px) и 4 плитки сервисов в ряд на Windows; отвечает ли instagram.com на delay-тест (иначе facebook.com); выбранный адрес применяется при подключении.
+
+## CI
+
+- Кэш — `Swatinem/rust-cache` (ключ с версией rustc; раньше `actions/cache` с ключом по одному `Cargo.lock` протухал при обновлении stable и не пересохранялся → полная сборка 11–13 мин). PR: только `cargo test` (debug без debuginfo). Push в main: тесты + release (греет кэш). Релиз по тегу: только release, кэш из main. PR отменяет свои прошлые прогоны.
+
+## Linux (PR #19, draft)
+
+CI `linux.yml` собирает и тестирует на x86_64 и aarch64 (зелёный 12.11), в ветку влит main с #20. Вживую не запускался. У пользователя есть Fedora и Docker — тестирует руками. Устройство и решения — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md), раздел «Linux».
 - Один крейт `windows/source`: `platform/{windows,linux}.rs`, `tray/{windows,linux}.rs`, cfg в `engine.rs`/`ui.rs`/`update.rs`; Linux-зависимости (`ksni`, `libc`, `flate2`, `tar`) только под `cfg(unix)`, `tray-icon`/`windows-sys` только под `cfg(windows)`.
 - Права: GUI от пользователя + root-хелпер (`WarpUnblock --helper` под `pkexec`, JSON по stdin/stdout); nfqws получает очередь через таблицу nftables (запасной путь iptables). Пакеты: tar.gz (переносимый, самообновление), deb/rpm через nfpm (`/opt/warp-unblock`, данные в `~/.local/share/warp-unblock`).
 - Решения пользователя: «GUI от юзера + хелпер», «tar.gz + deb + rpm для x86_64 и aarch64», «один крейт, cfg по ОС».
-- Не проверено: компиляция под Linux; `--self-test` на собранном; окно (клиентская рамка, края для ресайза, свёртывание вместо трея); трей на GNOME/KDE; реальная очередь nfqws; pkexec-диалог; deb/rpm установка; CI `linux.yml` (apt-пакеты для GPUI подобраны по памяти).
+- Не проверено: `--self-test` на собранном; окно (клиентская рамка, края для ресайза, свёртывание вместо трея); трей на GNOME/KDE; реальная очередь nfqws; pkexec-диалог; deb/rpm установка.
 - Известные упрощения: автозапуск спросит пароль polkit при входе (постоянного правила polkit нет); «спрятать в трей» — это свёртывание окна; нет AppImage.
 
 ## Android
@@ -82,7 +91,7 @@
 
 ## Дальше
 
-1. Поднять Docker Desktop (или Linux-машину), собрать `windows/source` под Linux в контейнере (`ubuntu:22.04` + пакеты из DEVELOPMENT.md + Rust ≥ 1.95), поправить ошибки компиляции, прогнать `cargo test` и `--self-test` (`WARP_ROOT` на собранный `app/`).
-2. Запустить `linux.yml` в CI (push в ветку/PR), поправить список apt-пакетов; проверить `package.sh` на x86_64 и aarch64.
-3. Проверить на живом Linux: окно (GNOME и KDE), трей, pkexec, подбор профиля с nfqws, deb/rpm.
-4. Первый релиз с Linux — поднять версию в `Cargo.toml` и `build.gradle.kts`, дописать «что нового».
+1. Дождаться CI на #19 после правки воркфлоу (время сборки).
+2. Пользователь тестирует #20 (Windows/Android) и Linux-сборку из артефактов/Fedora: окно (GNOME/KDE), трей, pkexec, подбор с nfqws, rpm.
+3. Снять draft с #19, смержить.
+4. Релиз v0.7.8 (первый с Linux) — поднять версию в `Cargo.toml` и `build.gradle.kts`, дописать «что нового».
