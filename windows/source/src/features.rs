@@ -420,6 +420,7 @@ pub fn check_services() -> Vec<Service> {
         check("Discord", "https://discord.com/api/v10/gateway"),
         check("YouTube", "https://www.youtube.com/"),
         check("Telegram", "https://telegram.org/"),
+        check("Meta", "https://www.instagram.com/"),
     ]
 }
 

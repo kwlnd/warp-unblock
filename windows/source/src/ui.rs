@@ -1889,26 +1889,71 @@ impl Main {
                     }
                 })),
             );
+        // Адрес из пула: подбор ставит его сам, здесь можно выбрать вручную. Неизвестный или
+        // пустой в настройках — значит первый, как в `Catalog::endpoint_index`.
+        let current =
+            self.catalog.endpoints[self.catalog.endpoint_index(&self.settings.endpoint)].clone();
+        let mut addresses = div().flex().flex_wrap().gap_1();
+        for (index, address) in self.catalog.endpoints.iter().enumerate() {
+            let selected = *address == current;
+            let value = address.clone();
+            addresses = addresses.child(
+                div()
+                    .id(("endpoint", index))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .w(px(196.))
+                    .px(px(12.))
+                    .h(px(34.))
+                    .rounded(px(9.))
+                    .border_1()
+                    .border_color(if selected {
+                        accent
+                    } else {
+                        transparent_black()
+                    })
+                    .when(selected, |s| s.bg(c(SURFACE_HOVER)))
+                    .when(enabled, |s| {
+                        s.cursor_pointer().hover(|s| s.bg(c(SURFACE_HOVER)))
+                    })
+                    .child(dot(if selected { accent } else { c(BORDER) }, 8.))
+                    .child(text(address.clone(), 14., TEXT))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !enabled {
+                            return;
+                        }
+                        this.settings.endpoint = value.clone();
+                        this.save_settings();
+                        cx.notify();
+                    })),
+            );
+        }
         let mut body = div()
             .flex()
             .flex_col()
             .gap_4()
             .child(section_title(
                 "Профили WARP",
-                &format!(
-                    "Профиль — как маскируется WireGuard. Адрес WARP программа подбирает сама из {} вариантов, сейчас {}. Проверка идёт без TUN — перед тестом отключите другой VPN.",
-                    self.catalog.endpoints.len(),
-                    if self.settings.endpoint.is_empty() {
-                        &self.catalog.endpoints[0]
-                    } else {
-                        &self.settings.endpoint
-                    }
-                ),
+                "Профиль — как маскируется WireGuard, адрес — куда он подключается. Проверка идёт без TUN — перед тестом отключите другой VPN.",
             ))
             .child(card().child(actions).when(!enabled && !self.preview, |s| {
                 s.child(text("Менять профиль можно при отключённом соединении.", 13., MUTED))
             }))
-            .child(card().gap_1().p(px(8.)).child(list));
+            .child(card().gap_1().p(px(8.)).child(list))
+            .child(
+                card()
+                    .child(text("Адрес WARP", 15., TEXT).font_weight(FontWeight::SEMIBOLD))
+                    .child(text(
+                        format!(
+                            "Подбор выбирает его сам из {} вариантов, но можно указать вручную. Если адрес перестанет отвечать, автопереключение возьмёт соседний.",
+                            self.catalog.endpoints.len()
+                        ),
+                        13.,
+                        MUTED,
+                    ))
+                    .child(addresses),
+            );
         if self.settings.custom {
             body = body.child(
                 card().child(text("Аргументы winws", 15., TEXT)).child(
