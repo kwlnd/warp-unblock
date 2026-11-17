@@ -19,6 +19,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -375,6 +376,60 @@ private fun Home(ui: UiState, onToggle: () -> Unit) {
             }
         }
     }
+    ServicesCard(ui)
+}
+
+/** Проверка сервисов через WARP, как на главной Windows-версии. */
+@Composable
+private fun ServicesCard(ui: UiState) {
+    val p = LocalPalette.current
+    val services by AppState.services.collectAsState()
+    val checking by AppState.servicesChecking.collectAsState()
+    val connected = ui.phase == Phase.CONNECTED
+    WarpCard {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Проверка сервисов", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = p.text)
+                Text(
+                    when {
+                        checking -> "Проверяю через WARP…"
+                        connected -> "HTTPS через WARP. Голос и видео проверяйте отдельно."
+                        else -> "Сначала подключитесь"
+                    },
+                    fontSize = 13.sp,
+                    color = p.muted,
+                )
+            }
+            FilledTonalButton(onClick = { ServiceCheck.start() }, enabled = connected && !checking) { Text("Проверить") }
+        }
+        val names = ServiceCheck.targets.map { it.first }
+        if (checking || services.isNotEmpty()) {
+            names.chunked(2).forEach { pair ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    pair.forEach { name ->
+                        val result = services.firstOrNull { it.name == name }
+                        Row(
+                            Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(p.surfaceHover).padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Dot(
+                                when {
+                                    result == null -> p.border
+                                    result.delay != null -> p.ok
+                                    else -> p.error
+                                },
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(name, fontSize = 14.sp, color = p.text, maxLines = 1)
+                                Text(result?.detail ?: "…", fontSize = 12.sp, color = p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /** Вид светящейся сетки по состоянию; параметры те же, что в Windows-версии (ui.rs). */
@@ -484,7 +539,33 @@ private fun Profiles(ui: UiState, onAuto: () -> Unit) {
     ProfileStats.load(context)[index]?.let { stats ->
         Text("Текущий: успешно ${stats.successes}/${stats.attempts} · средняя задержка ${stats.totalMs / stats.successes.coerceAtLeast(1)} мс", fontSize = 13.sp, color = p.muted)
     }
-    Text("Адрес WARP подбирается сам из ${catalog.endpoints.size} вариантов; сейчас ${catalog.endpoints[catalog.endpointIndex(endpoint)]}.", fontSize = 13.sp, color = p.muted)
+    val currentEndpoint = catalog.endpoints[catalog.endpointIndex(endpoint)]
+    WarpCard(padding = 14.dp) {
+        Text("Адрес WARP", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = p.text)
+        Text(
+            "Подбор выбирает его сам, но можно указать вручную. Если адрес перестанет отвечать, автопереключение возьмёт соседний.",
+            fontSize = 13.sp,
+            color = p.muted,
+        )
+        catalog.endpoints.forEach { address ->
+            val selected = address == currentEndpoint
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(9.dp))
+                    .border(1.dp, if (selected) p.accent else Color.Transparent, RoundedCornerShape(9.dp))
+                    .background(if (selected) p.surfaceHover else Color.Transparent)
+                    .then(if (locked) Modifier else Modifier.clickable { AppState.selectEndpoint(address) })
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Dot(if (selected) p.accent else p.border, 9.dp)
+                Text(address, fontSize = 14.sp, fontFamily = FontFamily.Monospace, color = p.text, modifier = Modifier.weight(1f))
+                if (selected) Text("выбран", fontSize = 12.sp, color = p.muted)
+            }
+        }
+    }
     catalog.profiles.forEachIndexed { i, strategy ->
         val delay = results[i]
         val (color, note) = when {

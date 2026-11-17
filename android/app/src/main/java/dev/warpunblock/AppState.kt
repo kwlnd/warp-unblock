@@ -31,6 +31,9 @@ object AppState {
     val traffic = MutableStateFlow(0L to 0L)
     /** Момент подключения (мс), null — не подключено. */
     val since = MutableStateFlow<Long?>(null)
+    /** Последняя проверка сервисов через WARP (заполняется по мере проверки). */
+    val services = MutableStateFlow<List<ServiceResult>>(emptyList())
+    val servicesChecking = MutableStateFlow(false)
 
     private lateinit var prefs: android.content.SharedPreferences
 
@@ -62,6 +65,12 @@ object AppState {
     /** Подбор нашёл рабочую пару «профиль + адрес». */
     fun selectPair(index: Int, address: String) {
         selectStrategy(index)
+        endpoint.value = address
+        prefs.edit().putString("endpoint", address).apply()
+    }
+
+    /** Адрес из пула, выбранный вручную; профиль маскировки не меняется. */
+    fun selectEndpoint(address: String) {
         endpoint.value = address
         prefs.edit().putString("endpoint", address).apply()
     }
