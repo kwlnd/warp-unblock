@@ -4,8 +4,8 @@
 
 ## Структура и релизы
 
-- Монорепо: только ветка `main`, папки `windows/`, `android/`, `tools/` (генератор иконок, стенд стратегий), `branding/` (SVG знака «!W» — исходник иконок).
-- Релиз один на обе платформы: тег `vX.Y.Z` → `release.yml` вызывает `windows.yml` и `android.yml`, публикует ZIP (+ `.zip.sha256` для старых клиентов), APK `arm64-v8a` и `universal`, `SHA256SUMS.txt` и подпись `SHA256SUMS.txt.sig`. Версия общая: `windows/source/Cargo.toml` (+ `Cargo.lock`) и `android/app/build.gradle.kts`; README номеров версий не содержат (ссылки на releases/latest). «Что нового» дописывается к релизу вручную после CI. Старые релизы не удалять.
+- Монорепо: только ветка `main`, папки `windows/` (там же общий Rust-крейт для Windows и Linux), `linux/` (пакеты, скрипты, README), `android/`, `tools/` (генератор иконок, стенд стратегий), `branding/` (SVG знака «!W» — исходник иконок).
+- Релиз один на обе платформы: тег `vX.Y.Z` → `release.yml` вызывает `windows.yml`, `linux.yml` и `android.yml`, публикует ZIP (+ `.zip.sha256` для старых клиентов), Linux (tar.gz, deb, rpm × x86_64/aarch64), APK `arm64-v8a` и `universal`, `SHA256SUMS.txt` и подпись `SHA256SUMS.txt.sig`. Версия общая: `windows/source/Cargo.toml` (+ `Cargo.lock`) и `android/app/build.gradle.kts`; README номеров версий не содержат (ссылки на releases/latest). «Что нового» дописывается к релизу вручную после CI. Старые релизы не удалять.
 - Последний релиз — **v0.7.7** (11.11). По версиям: v0.7.2 свечение и переходы; v0.7.3 прокси 7890→5630 (FlClash); v0.7.4 автопереключение, CPU, работа в фоне на Xiaomi, новые адреса; v0.7.5 пул адресов; v0.7.6 иконка «!W», подписанные обновления, обновление через WARP, APK universal, новые README; v0.7.7 фикс подбора на свежей Windows-установке.
 - Архив Windows: в корне `README.md` (= `windows/README.md`) и папка `WarpUnblock/` (exe + `app/`, лицензии в `app/licenses/`).
 
@@ -16,6 +16,24 @@
 - Обновление (`update.rs`): подпись `SHA256SUMS.txt.sig` → SHA-256 архива из подписанного списка → замена через `*.old` с откатом → перезапуск. Полная установка проверена вживую (v0.7.3 → v0.7.4, v0.7.5 → v0.7.6).
 - Профиль WARP: нет аккаунта или `wgcf-profile.conf` → `ensure_profile` получает их у API Cloudflare напрямую, затем способами обхода из `registration.json`; подбор делает это один раз до перебора.
 - Preview: `--preview`, `WARP_PREVIEW_STATE=busy|on|error|cycle`, `WARP_PREVIEW_UPDATE=1`.
+
+## В main, не в релизе
+
+- PR #20 (смержен 18.11): ручной выбор адреса WARP на «Профилях» (Windows + Android, при подключении заблокирован); проверка сервисов на главной Android (`ServiceCheck.kt`, через `/proxies/WARP/delay` основного ядра); Meta (`instagram.com`) в проверке на обеих платформах. CI зелёный, вживую не запускалось.
+- Проверить руками: ширина плиток адресов (196 px) и 4 плитки сервисов в ряд на Windows; отвечает ли instagram.com на delay-тест (иначе facebook.com); выбранный адрес применяется при подключении.
+
+## CI
+
+- Кэш — `Swatinem/rust-cache` (ключ с версией rustc; раньше `actions/cache` с ключом по одному `Cargo.lock` протухал при обновлении stable и не пересохранялся → полная сборка 11–13 мин). PR: только `cargo test` (debug без debuginfo). Push в main: тесты + release (греет кэш). Релиз по тегу: только release, кэш из main. PR отменяет свои прошлые прогоны.
+
+## Linux (PR #19, draft)
+
+CI `linux.yml` собирает и тестирует на x86_64 и aarch64 (зелёный 12.11), в ветку влит main с #20. Вживую не запускался. У пользователя есть Fedora и Docker — тестирует руками. Устройство и решения — [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md), раздел «Linux».
+- Один крейт `windows/source`: `platform/{windows,linux}.rs`, `tray/{windows,linux}.rs`, cfg в `engine.rs`/`ui.rs`/`update.rs`; Linux-зависимости (`ksni`, `libc`, `flate2`, `tar`) только под `cfg(unix)`, `tray-icon`/`windows-sys` только под `cfg(windows)`.
+- Права: GUI от пользователя + root-хелпер (`WarpUnblock --helper` под `pkexec`, JSON по stdin/stdout); nfqws получает очередь через таблицу nftables (запасной путь iptables). Пакеты: tar.gz (переносимый, самообновление), deb/rpm через nfpm (`/opt/warp-unblock`, данные в `~/.local/share/warp-unblock`).
+- Решения пользователя: «GUI от юзера + хелпер», «tar.gz + deb + rpm для x86_64 и aarch64», «один крейт, cfg по ОС».
+- Не проверено: `--self-test` на собранном; окно (клиентская рамка, края для ресайза, свёртывание вместо трея); трей на GNOME/KDE; реальная очередь nfqws; pkexec-диалог; deb/rpm установка.
+- Известные упрощения: автозапуск спросит пароль polkit при входе (постоянного правила polkit нет); «спрятать в трей» — это свёртывание окна; нет AppImage.
 
 ## Android
 
@@ -33,12 +51,12 @@
 
 ## Подпись обновлений
 
-- Ed25519: секрет `UPDATE_SIGNING_KEY` в GitHub, бэкап ключа — `.signing/update-signing-key.pem` (в .gitignore; **пользователю перенести в надёжное место** — без ключа новые релизы не примут уже установленные программы). Публичный ключ — константа `UPDATE_KEY` в `update.rs` и `Updater.kt`.
+- Ed25519: секрет `UPDATE_SIGNING_KEY` в GitHub, бэкап ключа — `.signing/update-signing-key.pem` (в .gitignore; у пользователя есть надёжная копия — без ключа новые релизы не примут уже установленные программы). Публичный ключ — константа `UPDATE_KEY` в `update.rs` и `Updater.kt`.
 - Подпись каждого релиза после CI проверяется вручную: `openssl pkeyutl -verify -pubin -inkey pub.pem -rawin -in SHA256SUMS.txt -sigfile sig.bin` (pub.pem собирается из `UPDATE_KEY`).
 
 ## Стенд стратегий (телефон пользователя, root)
 
-- Xiaomi 12 Pro, Android 15, root (Magisk), adb из `android/.toolchain/sdk/platform-tools/`. `tools/lab/` — `lab.sh` (mihomo мимо VPN через `wlan0`, опционально `nfqws` + NFQUEUE с исключением метки 0x40000000) и `drive.py`; описание в `tools/lab/README.md`. Файлы стенда остались на телефоне в `/data/local/tmp/wlab` — удалить, когда не нужен.
+- Xiaomi 12 Pro, Android 15, root (Magisk), adb из `android/.toolchain/sdk/platform-tools/`. `tools/lab/` — `lab.sh` (mihomo мимо VPN через `wlan0`, опционально `nfqws` + NFQUEUE с исключением метки 0x40000000) и `drive.py`; описание в `tools/lab/README.md`. Файлы стенда на телефоне (`/data/local/tmp/wlab`) пользователь разрешил удалить.
 
 ## Решения
 
@@ -54,14 +72,11 @@
 
 ## Не проверено вживую
 
-- Подписанное обновление и запасной путь через WARP: первая живая проверка — ПК пользователя обновляется с v0.7.6 (сборка с фиксом) на v0.7.7 из программы.
-- Windows: автопереключение при реальной блокировке.
+- Windows: автопереключение при реальной блокировке. (Обновление до v0.7.7 из программы и телефон подтверждены пользователем 12.11.)
 - Android: запрос «работы в фоне» и «Автозапуск», сообщение «Порт занят», выбор приложений, Always-on, QR, установка обновления из программы.
-- Новая иконка на телефоне (лаунчер, шторка) — v0.7.6 поставлена, пользователь не подтверждал.
 
 ## Открытые вопросы
 
-- У друга пользователя подбор не находил ни одного профиля (таймауты). Возможно, тот же баг `warp.ps1` (нет профиля → скрипт падает); проверить на v0.7.7, иначе нужны его `launcher.log`, `mihomo.log`, `strategy-results.json`.
 - 11.11 около 12:10 через WARP YouTube отвечал 4/6, Telegram Web 2/6 на всех адресах (остальное 6/6) — похоже на путь Cloudflare → Google/Telegram. Перепроверить.
 
 ## Гочи
@@ -76,6 +91,7 @@
 
 ## Дальше
 
-1. Убедиться, что ПК пользователя обновился до v0.7.7 через программу (подпись в живом сценарии).
-2. Проверить на телефоне «работу в фоне» и новую иконку.
-3. Linux-клиент на GPUI.
+1. Дождаться CI на #19 после правки воркфлоу (время сборки).
+2. Пользователь тестирует #20 (Windows/Android) и Linux-сборку из артефактов/Fedora: окно (GNOME/KDE), трей, pkexec, подбор с nfqws, rpm.
+3. Снять draft с #19, смержить.
+4. Релиз v0.7.8 (первый с Linux) — поднять версию в `Cargo.toml` и `build.gradle.kts`, дописать «что нового».

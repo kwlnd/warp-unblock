@@ -9,10 +9,11 @@
 | Папка | Что | CI | Теги |
 | --- | --- | --- | --- |
 | `windows/` | Rust-приложение (`source/`), ядра и конфиги (`app/`), скрипты сборки (`tools/`) | `.github/workflows/windows.yml` | общий `v*` |
+| `linux/` | Пакеты и скрипты сборки (tar.gz, deb, rpm), README; код программы общий с Windows — `windows/source/` | `.github/workflows/linux.yml` | общий `v*` |
 | `android/` | Kotlin + Compose, Gradle-проект | `.github/workflows/android.yml` | общий `v*` |
 | `docs/` | Общая документация, формат списков доменов (`DOMAIN-LISTS.md`) | — | — |
 
-CI платформы запускается на push/PR только при изменениях в её папке. Релиз — один на обе платформы: тег `vX.Y.Z` запускает `.github/workflows/release.yml`, он вызывает оба воркфлоу и публикует ZIP, два APK и общий `SHA256SUMS.txt`. Версия одна; Android `versionCode` = major·10000 + minor·100 + patch. Старые теги `android-v*` остались в истории, апдейтер Android их тоже понимает. Дальше в этом файле — Windows; пути указаны относительно `windows/`. Устройство Android — [android/README.md](../android/README.md).
+CI платформы запускается на push/PR только при изменениях в её папке. Релиз — один на обе платформы: тег `vX.Y.Z` запускает `.github/workflows/release.yml`, он вызывает все три воркфлоу и публикует ZIP, Linux (tar.gz, deb, rpm для x86_64 и aarch64), два APK и общий `SHA256SUMS.txt`. Версия одна; Android `versionCode` = major·10000 + minor·100 + patch. Старые теги `android-v*` остались в истории, апдейтер Android их тоже понимает. Дальше в этом файле — Windows (общий код и Linux-отличия описаны в разделе «Linux»); пути указаны относительно `windows/`. Устройство Android — [android/README.md](../android/README.md).
 
 ## Общая схема (Windows)
 
@@ -37,8 +38,8 @@ WarpUnblock.exe (Rust, GPUI + gpui-component)
 | `features.rs` | Редактор и нормализация доменов, GitHub Releases, HTTPS-проверки, резервные копии/QR и статистика профилей |
 | `opera.rs` | Параметры Opera EU и проверка страны выхода |
 | `strategies.rs` | Каталог WARP (`app/config/strategies.json`): пул адресов и профили маскировки, порядок подбора |
-| `platform.rs` | WinAPI: Job Object, запуск процессов, задача планировщика для автозапуска, показ/скрытие окна |
-| `tray.rs` | Иконка в трее и меню, работает независимо от отрисовки окна |
+| `platform/` | Всё ОС-зависимое с общим набором функций: `windows.rs` — WinAPI (Job Object, запуск процессов, задача планировщика, показ/скрытие окна), `linux.rs` — процессы, root-хелпер под pkexec, правила nftables для nfqws, XDG-автозапуск, один экземпляр |
+| `tray/` | Иконка в трее и меню, работает независимо от отрисовки окна: `windows.rs` — `tray-icon`, `linux.rs` — StatusNotifierItem через `ksni` |
 | `ui.rs` | Интерфейс на GPUI: боковая навигация, страницы «Подключение», «Профили», «Списки», «Настройки», «Журнал», модальные окна (обновление, QR, закрытие), Ренат-мод |
 | `update.rs` | Проверка релизов GitHub, загрузка ZIP, сверка SHA-256, замена файлов и перезапуск |
 
@@ -91,6 +92,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File android/tools/build.ps1
 ## Релизы
 
 `.github/workflows/windows.yml` собирает exe на `windows-latest`; при вызове из `release.yml` упаковывает `WarpUnblock-<версия>-win-x64.zip`: в корне `README.md` и папка `WarpUnblock/` (exe и `app/`, лицензии — в `app/licenses/`), рядом `.sha256`. Релиз запускается пушем тега `v*` или вручную в Actions (Release, поле версии).
+
+## Linux
+
+Тот же крейт `windows/source`: код выбирается по ОС (`platform/`, `tray/`, `cfg(windows)`/`cfg(unix)` в `engine.rs`, `ui.rs`, `update.rs`). Отличия:
+
+- **Права.** Окно, трей и настройки — от обычного пользователя. mihomo (TUN) и nfqws запускает **хелпер** — этот же бинарник с `--helper` под `pkexec` (`platform/linux.rs`, `run_helper`). Окно говорит с ним построчным JSON по stdin/stdout (`Spawn`, `Status`, `Kill`, `KillJob`). Хелпер один на сеанс, поэтому пароль спрашивается один раз; запускает только файлы из `app/bin/` рядом со своим бинарником, требует, чтобы рабочая папка принадлежала вызвавшему пользователю, и убивает всё (процессы и правила), когда stdin закрылся. Файлы, созданные root в `data/` (кэш mihomo), он после остановки возвращает пользователю. `needs_root` в `engine.rs`: root нужен только nfqws и mihomo с TUN, проверка конфига и профиль без TUN идут без прав.
+- **nfqws вместо winws.** Ключи `--wf-*` отбрасываются (это WinDivert); из `--filter-udp/tcp` и `--ipset` хелпер строит таблицу nftables `inet warp_unblock_<N>` (хук `output`, `queue num <N> bypass`, метка `0x40000000` исключена; без nft — правила iptables/ip6tables). `bypass` — если nfqws упадёт, пакеты идут как обычно. Остаточные таблицы удаляются при старте хелпера.
+- **Профиль WARP** без PowerShell: `wgcf register/generate` и запрос reserved делает `engine.rs` (`profile_script` для unix).
+- **Раскладка.** Переносимая установка (архив): корень — папка с бинарником. Пакетная (`/opt/warp-unblock`, только чтение): корень — `~/.local/share/warp-unblock` с `data/`, ссылками на `app/bin|assets|licenses` и копией `app/config` (свои списки не перезаписываются, остальное синхронизируется при старте). `WARP_ROOT` задаёт корень явно (тесты, разработка). Самообновление только у переносимой установки; пакеты обновляются пакетным менеджером.
+- **Окно.** Клиентская рамка (`WindowDecorations::Client`): кнопки окна, перетаскивание и края для изменения размера рисуем сами (`ui.rs`: `linux_buttons`, `linux_drag`, `resize_handles`), потому что `WindowControlArea` GPUI обрабатывает только на Windows. «Спрятать в трей» — свёртывание окна; запросы «показать/спрятать» от трея и второго запуска приходят через `platform::take_window_request`. Один экземпляр — `flock` + сокет в `$XDG_RUNTIME_DIR`.
+- **Обновление.** Архив `…-linux-<arch>.tar.gz` (`flate2` + `tar`), подпись и SHA-256 проверяются так же, как у ZIP.
+
+Сборка (Ubuntu/Debian; пакеты для GPUI):
+
+```bash
+sudo apt install pkg-config clang cmake libfontconfig-dev libfreetype-dev libxkbcommon-dev libxkbcommon-x11-dev   libwayland-dev libvulkan-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xkb-dev   libx11-xcb-dev libxrandr-dev libxi-dev libxcursor-dev libasound2-dev nftables
+cd windows/source && cargo test --locked && cargo build --release --locked
+linux/tools/package.sh x86_64 v0.0.0     # tar.gz, deb, rpm в dist/ (нужны curl и сеть)
+```
+
+`linux/tools/fetch-components.sh` кладёт ядра в `app/bin` и сверяет их с закреплёнными SHA-256 (mihomo, wgcf, opera-proxy, nfqws из zapret v72.13), `package.sh` прогоняет `--self-test` на собранном и только потом пакует. CI (`linux.yml`) собирает на Ubuntu 22.04 (glibc 2.35), чтобы бинарник шёл и на старых дистрибутивах: x86_64 на `ubuntu-22.04`, aarch64 на `ubuntu-22.04-arm`.
 
 ## Оформление
 

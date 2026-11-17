@@ -420,6 +420,7 @@ rules:
 
   # Guard for Opera itself. Its connection to the forced-WARP listener is local.
   - PROCESS-NAME,opera-proxy.exe,DIRECT
+  - PROCESS-NAME,opera-proxy,DIRECT
 
   # Сторонние VPN-клиенты не заворачиваем в WARP
   - PROCESS-NAME-REGEX,(?i).*wireguard.*,DIRECT
@@ -443,7 +444,7 @@ rules:
   # Opera is HTTP CONNECT only; other AI transports retain WARP.
   - AND,((NETWORK,tcp),(RULE-SET,локальные-нейросети)),Opera
   - AND,((NETWORK,tcp),(RULE-SET,нейросети)),Opera
-  - AND,((NETWORK,tcp),(PROCESS-NAME-REGEX,(?i)^(claude|chatgpt|codex|opencode|jan-desktop)\.exe$)),Opera
+  - AND,((NETWORK,tcp),(PROCESS-NAME-REGEX,(?i)^(claude|chatgpt|codex|opencode|jan-desktop)(\.exe)?$)),Opera
   - RULE-SET,локальные-нейросети,WARP
   - RULE-SET,нейросети,WARP
 

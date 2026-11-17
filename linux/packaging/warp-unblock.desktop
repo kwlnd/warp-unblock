@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=WARP Unblock
+GenericName=Обход блокировок
+Comment=Заблокированные сервисы через Cloudflare WARP, нейросети через Opera EU
+Exec=@EXEC@
+Icon=warp-unblock
+Terminal=false
+Categories=Network;
+StartupWMClass=warp-unblock
+Keywords=warp;vpn;wireguard;zapret;

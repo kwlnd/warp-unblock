@@ -22,11 +22,22 @@ fn main() {
 }
 
 fn run() -> anyhow::Result<()> {
-    let root = std::env::current_exe()?.parent().unwrap().to_path_buf();
+    if std::env::args().any(|arg| arg == "--version") {
+        println!("{}", update::VERSION);
+        return Ok(());
+    }
+    // Linux: root-хелпер для mihomo (TUN) и nfqws; его поднимает само приложение через pkexec.
+    #[cfg(unix)]
+    if std::env::args().any(|arg| arg == "--helper") {
+        return platform::run_helper();
+    }
+    let root = platform::root()?;
     // Self-test is deliberately unprivileged and never changes system routes.
     if std::env::args().any(|arg| arg == "--self-test") {
         return engine::self_test(&root);
     }
+    // Windows: окно работает с правами администратора. На Linux окно обычное, права берёт хелпер.
+    #[cfg(windows)]
     if !platform::is_admin() && !std::env::args().any(|arg| arg == "--preview") {
         platform::elevate()?;
         return Ok(());

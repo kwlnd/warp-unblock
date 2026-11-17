@@ -16,6 +16,11 @@ on:
 permissions:
   contents: read
 
+# Новый пуш в PR отменяет прошлую проверку; релиз (тег) не отменяется.
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   MIHOMO_VERSION: v1.19.33
   HEV_VERSION: 2.9.3

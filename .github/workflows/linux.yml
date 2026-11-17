@@ -1,0 +1,117 @@
+name: Linux
+
+on:
+  # Проверка на push/PR; релиз собирает release.yml, вызывая этот файл с версией.
+  push:
+    branches: [main]
+    paths: ["windows/source/**", "windows/app/**", "linux/**", ".github/workflows/linux.yml"]
+  pull_request:
+    # Метка `packages` на PR — собрать release и пакеты в артефакты для ручного теста.
+    types: [opened, synchronize, reopened, labeled]
+    paths: ["windows/source/**", "windows/app/**", "linux/**", ".github/workflows/linux.yml"]
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+  # Ручная сборка для теста: всё как в релизе (release + пакеты в артефакты), без публикации.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия в сборке, например v0.7.8"
+        type: string
+        required: true
+        default: v0.7.8
+
+permissions:
+  contents: read
+
+# Новый пуш в PR отменяет прошлую проверку; релиз (тег) не отменяется.
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Тесты без debuginfo: быстрее сборка и меньше кэш.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu 22.04 (glibc 2.35): собранное запускается и на более новых дистрибутивах.
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Версия
+        id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          # Без версии (PR, push) — версия из Cargo.toml: тестовая сборка не предлагает обновиться.
+          v="${INPUT_VERSION:-v$(sed -n 's/^version = "\(.*\)"/\1/p' windows/source/Cargo.toml | head -1)}"
+          echo "tag=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Системные библиотеки
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config clang cmake libfontconfig-dev libfreetype-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xkb-dev \
+            libx11-xcb-dev libxrandr-dev libxi-dev libxcursor-dev libasound2-dev \
+            nftables
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Кэш зависимостей: ключ учитывает версию rustc и Cargo.lock. PR и тег берут кэш main;
+      # кэш тега никому больше не виден, поэтому его не сохраняем.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows/source
+          shared-key: linux-${{ matrix.arch }}
+          save-if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+      # PR и push: тесты и запуск debug-сборки. Релиз их не гоняет — коммит уже проверен в main.
+      - name: Тесты
+        if: inputs.version == ''
+        working-directory: windows/source
+        run: |
+          cargo test --locked
+          cargo build --locked
+          ./target/debug/warp-unblock --version
+
+      # Release (LTO) — долгая: только push в main (заодно греет кэш для релиза) и релиз.
+      - name: Сборка
+        if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'packages')
+        working-directory: windows/source
+        env:
+          WARP_VERSION: ${{ steps.ver.outputs.tag }}
+        run: |
+          cargo build --release --locked
+          ./target/release/warp-unblock --version
+
+      - name: Собрать пакеты
+        if: inputs.version != '' || contains(github.event.pull_request.labels.*.name, 'packages')
+        run: linux/tools/package.sh "${{ matrix.arch }}" "${{ steps.ver.outputs.tag }}"
+
+      - uses: actions/upload-artifact@v4
+        if: inputs.version != '' || contains(github.event.pull_request.labels.*.name, 'packages')
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.deb
+            dist/*.rpm
+          if-no-files-found: error
